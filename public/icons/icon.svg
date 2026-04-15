@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Wallet Buddy">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22c55e"/>
+      <stop offset="1" stop-color="#166534"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#g)"/>
+  <path fill="#ecfdf5" d="M352 176H160c-17.7 0-32 14.3-32 32v160c0 17.7 14.3 32 32 32h192c17.7 0 32-14.3 32-32V208c0-17.7-14.3-32-32Zm-16 112a24 24 0 1 1 0-48 24 24 0 0 1 0 48Z"/>
+  <path fill="#bbf7d0" d="M352 176v-16c0-35.3-28.7-64-64-64H176c-26.5 0-48 21.5-48 48v48h224Z"/>
+</svg>
