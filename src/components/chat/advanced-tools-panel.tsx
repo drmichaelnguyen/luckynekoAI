@@ -197,7 +197,7 @@ export function AdvancedToolsPanel({
               type="button"
               size="sm"
               variant={tab === id ? "secondary" : "ghost"}
-              className="min-w-0 shrink-0 flex-1 text-[10px] sm:text-sm"
+              className="min-w-0 shrink-0 flex-1 text-xs sm:text-sm"
               onClick={() => setTab(id)}
               title={id === "profile" ? "Account & profile" : undefined}
               aria-label={id === "profile" ? "Profile — account information" : undefined}

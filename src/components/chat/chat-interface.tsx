@@ -8,6 +8,7 @@ import {
   LogOut,
   Mic,
   Paperclip,
+  RotateCcw,
   SendHorizontal,
   Square,
   User,
@@ -537,6 +538,23 @@ export function ChatInterface() {
           </div>
           {status === "authenticated" && session?.user?.email ? (
             <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 shrink-0"
+                title="New chat"
+                aria-label="Start new chat"
+                onClick={() => {
+                  setMessages(defaultWelcomeMessages());
+                  setPackedFinancialSummary("");
+                  setPackedThroughIndex(0);
+                  chatHydratedKeyRef.current = "";
+                  try { localStorage.removeItem(CHAT_DAY_STORAGE_KEY); } catch { /* ignore */ }
+                }}
+              >
+                <RotateCcw className="h-4 w-4" />
+              </Button>
               <Button variant="ghost" size="icon" className="hidden h-9 w-9 shrink-0 sm:inline-flex" asChild title={t("guide_link_label")}>
                 <Link href="/guide" aria-label={t("guide_link_aria")}>
                   <BookOpen className="h-4 w-4" />
@@ -635,7 +653,7 @@ export function ChatInterface() {
                             : "rounded-bl-md bg-card text-card-foreground",
                         )}
                       >
-                        <div className="whitespace-pre-wrap">{m.content}</div>
+                        <div className="whitespace-pre-wrap break-words">{m.content}</div>
 
                         {m.attachments && m.attachments.length > 0 ? (
                           <div

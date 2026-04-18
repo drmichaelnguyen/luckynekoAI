@@ -54,6 +54,7 @@ export async function findUserForCredentialsByEmail(
   nickname: string | null;
   passwordHash: string;
   avatarRelativePath: string | null;
+  role: string;
 } | null> {
   try {
     return await db.user.findUnique({
@@ -65,6 +66,7 @@ export async function findUserForCredentialsByEmail(
         nickname: true,
         passwordHash: true,
         avatarRelativePath: true,
+        role: true,
       },
     });
   } catch (e) {
@@ -81,6 +83,7 @@ export async function findUserForCredentialsByEmail(
       nickname: null,
       passwordHash: row.passwordHash,
       avatarRelativePath: null,
+      role: "user",
     };
   }
 }

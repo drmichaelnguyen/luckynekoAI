@@ -44,6 +44,19 @@ const GeminiResponseSchema = z
     extractedTextSummary: z.union([z.string(), z.null()]).optional(),
     /** When true with a financial document upload, the app waits for explicit user ADD/EDIT before writing the ledger. */
     awaitingLedgerDecision: z.boolean().optional(),
+    /** Per-category split items proposed for a mixed-category receipt. */
+    receiptSplit: z
+      .array(
+        z.object({
+          description: z.string(),
+          category: z.string(),
+          amount: z.number(),
+          currency: z.string().optional(),
+          direction: z.enum(["in", "out"]).optional(),
+        }),
+      )
+      .nullable()
+      .optional(),
     /** Populated when the user expresses intent to buy something (not yet purchased). Auto-saved as a financial plan. */
     planSuggestion: z
       .object({
@@ -104,6 +117,7 @@ Your JSON MUST match this shape (optional keys only when relevant):
   "followUpQuestion": string | null,
   "extractedTextSummary": string | null,
   "awaitingLedgerDecision": boolean,
+  "receiptSplit": null | [{ "description": string, "category": string, "amount": number, "currency": string, "direction": "in"|"out" }],
   "planSuggestion": null | { "title": string, "description": string | null, "amountCents": number | null, "currency": string, "period": "none" | "monthly" | "yearly" }
 }
 
@@ -123,6 +137,8 @@ Uploaded files (images/PDF) — pipeline before anything hits the ledger:
 5) Typed-only purchases (no file) use freeform_transaction; omit awaitingLedgerDecision or set false.
 6) Amount normalization matters: return numeric amounts, not formatted strings. For VND, return whole-dong numbers like 1250000. For CAD, return decimal numbers like 47.82.
 7) Dates should be normalized to ISO yyyy-mm-dd whenever the document makes the date reasonably clear.
+8) Currency conversion: the USER LEDGER CONTEXT includes live EXCHANGE RATES and a "Preferred currency" field.
+9) Category splitting: if a receipt or bill clearly contains line items across DIFFERENT categories (e.g. groceries + electronics + clothing in one Costco trip, or a utility bill mixing internet + phone), populate receiptSplit with one entry per category group — each with description, category (matching the user's CATEGORIES list), amount, currency, and direction. The individual amounts must sum to the total. Set awaitingLedgerDecision true so the user can review and confirm each split. If everything belongs to a single category, leave receiptSplit null and use the normal receipt object. If the user states an amount in a foreign currency (different from their preferred currency), convert it to their preferred currency using those rates and set the transaction/receipt currency to the preferred currency. Always mention both the original amount and the converted amount in assistantMessage (e.g. "50 USD ≈ 68.20 CAD"). If no exchange rate context is available, record the amount in the original currency and note the conversion is needed.
 
 Transaction object fields (use null for unknown):
 - amount: number | null (major currency units, positive for magnitude; use direction for sign semantics)
@@ -592,10 +608,21 @@ export async function handleChatInput(formData: FormData) {
           proposed,
         };
         pendingImportJson = JSON.stringify(payload).slice(0, 500_000);
+        const splitItems =
+          Array.isArray(data.receiptSplit) && data.receiptSplit.length > 0
+            ? data.receiptSplit.map((item) => ({
+                description: String(item.description ?? ""),
+                category: String(item.category ?? "Other"),
+                amount: Number(item.amount ?? 0),
+                currency: String(item.currency ?? "CAD"),
+                direction: item.direction === "in" ? ("in" as const) : ("out" as const),
+              }))
+            : undefined;
         pendingDocumentImport = {
           chatTurnId,
           documentKind: pendingKind,
           extractedTextSummary: extracted,
+          splitItems,
         };
       }
     }

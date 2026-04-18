@@ -13,10 +13,20 @@ export type ChatMessage = {
   structuredJson?: string;
 };
 
+export type ReceiptSplitItem = {
+  description: string;
+  category: string;
+  amount: number;
+  currency: string;
+  direction: "in" | "out";
+};
+
 export type PendingDocumentImport = {
   chatTurnId: string;
   documentKind: "receipt" | "canadian_paystub" | "payroll_document";
   extractedTextSummary: string;
+  /** Suggested per-category split items from a mixed-category receipt */
+  splitItems?: ReceiptSplitItem[];
 };
 
 export type ChatActionSuccess = {

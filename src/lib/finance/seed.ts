@@ -1,5 +1,6 @@
 import type { PlanKind, PlanPeriod, PrismaClient, WalletKind } from "@prisma/client";
 
+import { buildExchangeRateContext } from "@/lib/finance/exchange-rates";
 import { slugify } from "@/lib/finance/slug";
 import { findUserNameAndNicknameById } from "@/lib/prisma/user-select-compat";
 
@@ -133,7 +134,7 @@ export async function ensureFinanceSeed(db: PrismaClient, userId: string): Promi
 export async function financeContextLines(db: PrismaClient, userId: string): Promise<string> {
   try {
     await ensureFinanceSeed(db, userId);
-    const [user, wallets, categories, plans, balanceGroups] = await Promise.all([
+    const [user, wallets, categories, plans, balanceGroups, userPrefs] = await Promise.all([
       findUserNameAndNicknameById(db, userId),
       db.wallet.findMany({
         where: { userId },
@@ -151,7 +152,11 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
         where: { userId, status: { not: "rejected" } },
         _sum: { amountCents: true },
       }).catch(() => [] as { walletId: string; direction: string; _sum: { amountCents: number | null } }[]),
+      db.user.findUnique({ where: { id: userId }, select: { preferredCurrency: true } }),
     ]);
+
+    const preferredCurrency = (userPrefs?.preferredCurrency ?? "CAD").toUpperCase();
+    const fxContext = await buildExchangeRateContext(preferredCurrency);
 
     const walletNetMap = new Map<string, number>();
     for (const row of balanceGroups) {
@@ -165,6 +170,7 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
       "USER PREFERENCES:",
       `- Address the user naturally as "${address}" in assistantMessage (nickname if set, otherwise name).`,
       `- Display name on file: ${user?.name ?? "(not set)"}`,
+      `- Preferred currency: ${preferredCurrency}`,
     ];
 
     const planLines =
@@ -198,6 +204,8 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
       ...cLines,
       "",
       ...planLines,
+      "",
+      ...(fxContext ? [fxContext] : []),
     ].join("\n");
   } catch (e) {
     console.error("[nekozen] financeContextLines failed", e);

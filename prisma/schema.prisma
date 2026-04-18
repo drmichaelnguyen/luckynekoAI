@@ -16,6 +16,8 @@ model User {
   nickname     String?
   /// Relative path under avatar storage root, e.g. `{userId}/avatar.jpg`
   avatarRelativePath String?
+  /// "user" | "admin"
+  role                String  @default("user")
   /// false until the user finishes first-run onboarding (new accounts set explicitly).
   onboardingCompleted Boolean @default(true)
   /// Primary reporting currency for wallets & chat context.
@@ -189,6 +191,8 @@ model Transaction {
   importBatchId     String?
   importBatch       ImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
   rawStructuredJson String?
+  /// JSON array of edit snapshots: [{editedAt, before, after, editedBy}]
+  editHistoryJson   String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

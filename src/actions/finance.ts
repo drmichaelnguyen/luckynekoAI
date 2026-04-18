@@ -132,3 +132,158 @@ export async function rejectPendingTransactionAction(id: string) {
   if (r.count === 0) return { ok: false as const, error: "Not found." };
   return { ok: true as const };
 }
+
+export type TransactionDetail = {
+  id: string;
+  amountCents: number;
+  direction: "in" | "out";
+  currency: string;
+  merchant: string | null;
+  memo: string | null;
+  occurredAt: string;
+  recurrence: string;
+  status: string;
+  walletId: string;
+  walletName: string;
+  categoryId: string | null;
+  categoryName: string;
+  source: string;
+  rawStructuredJson: string | null;
+  editHistory: EditSnapshot[];
+};
+
+export type EditSnapshot = {
+  editedAt: string;
+  before: Partial<EditableFields>;
+  after: Partial<EditableFields>;
+};
+
+export type EditableFields = {
+  amountCents: number;
+  direction: "in" | "out";
+  currency: string;
+  merchant: string | null;
+  memo: string | null;
+  occurredAt: string;
+  walletId: string;
+  categoryId: string | null;
+};
+
+export async function getTransactionDetailAction(id: string): Promise<
+  { ok: true; tx: TransactionDetail; wallets: { id: string; name: string }[]; categories: { id: string; name: string; kind: string }[] } |
+  { ok: false; error: string }
+> {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false, error: "Unauthorized" };
+  const [tx, wallets, categories] = await Promise.all([
+    prisma.transaction.findFirst({
+      where: { id, userId: session.user.id },
+      include: { wallet: true, category: true },
+    }),
+    prisma.wallet.findMany({ where: { userId: session.user.id }, orderBy: [{ isDefault: "desc" }, { sortOrder: "asc" }], select: { id: true, name: true } }),
+    prisma.category.findMany({ where: { userId: session.user.id }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }], select: { id: true, name: true, kind: true } }),
+  ]);
+  if (!tx) return { ok: false, error: "Transaction not found." };
+
+  let editHistory: EditSnapshot[] = [];
+  try {
+    if (tx.editHistoryJson) editHistory = JSON.parse(tx.editHistoryJson) as EditSnapshot[];
+  } catch { /* ignore */ }
+
+  return {
+    ok: true,
+    tx: {
+      id: tx.id,
+      amountCents: tx.amountCents,
+      direction: tx.direction as "in" | "out",
+      currency: tx.currency,
+      merchant: tx.merchant,
+      memo: tx.memo,
+      occurredAt: tx.occurredAt.toISOString(),
+      recurrence: tx.recurrence,
+      status: tx.status,
+      walletId: tx.walletId,
+      walletName: tx.wallet.name,
+      categoryId: tx.categoryId,
+      categoryName: tx.category?.name ?? "Other",
+      source: tx.source,
+      rawStructuredJson: tx.rawStructuredJson,
+      editHistory,
+    },
+    wallets,
+    categories,
+  };
+}
+
+export async function updateTransactionAction(
+  id: string,
+  fields: EditableFields,
+): Promise<{ ok: boolean; error?: string }> {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false, error: "Unauthorized" };
+
+  const existing = await prisma.transaction.findFirst({
+    where: { id, userId: session.user.id },
+  });
+  if (!existing) return { ok: false, error: "Not found." };
+
+  // Build edit snapshot for training history
+  const before: Partial<EditableFields> = {};
+  const after: Partial<EditableFields> = {};
+  const keys: (keyof EditableFields)[] = ["amountCents", "direction", "currency", "merchant", "memo", "occurredAt", "walletId", "categoryId"];
+  for (const k of keys) {
+    const oldVal = k === "occurredAt" ? existing.occurredAt.toISOString() : (existing[k as keyof typeof existing] as unknown);
+    const newVal = fields[k] as unknown;
+    if (String(oldVal) !== String(newVal ?? "")) {
+      (before as Record<string, unknown>)[k] = oldVal;
+      (after as Record<string, unknown>)[k] = newVal;
+    }
+  }
+
+  let editHistory: EditSnapshot[] = [];
+  try {
+    if (existing.editHistoryJson) editHistory = JSON.parse(existing.editHistoryJson) as EditSnapshot[];
+  } catch { /* ignore */ }
+
+  if (Object.keys(after).length > 0) {
+    editHistory.push({ editedAt: new Date().toISOString(), before, after });
+  }
+
+  const newOccurredAt = new Date(fields.occurredAt);
+  await prisma.transaction.update({
+    where: { id },
+    data: {
+      amountCents: Math.round(Math.abs(fields.amountCents)),
+      direction: fields.direction,
+      currency: fields.currency.toUpperCase(),
+      merchant: fields.merchant ?? null,
+      memo: fields.memo ?? null,
+      occurredAt: Number.isNaN(newOccurredAt.getTime()) ? existing.occurredAt : newOccurredAt,
+      walletId: fields.walletId,
+      categoryId: fields.categoryId ?? null,
+      editHistoryJson: editHistory.length > 0 ? JSON.stringify(editHistory) : existing.editHistoryJson,
+    },
+  });
+
+  // Also update training data on linked StoredMedia if any
+  if (Object.keys(after).length > 0) {
+    const media = await prisma.storedMedia.findFirst({ where: { transactionId: id } });
+    if (media) {
+      let bundle: Record<string, unknown> = {};
+      try {
+        if (media.trainingExampleJson) bundle = JSON.parse(media.trainingExampleJson) as Record<string, unknown>;
+      } catch { /* ignore */ }
+      const edits = Array.isArray(bundle._edits) ? (bundle._edits as unknown[]) : [];
+      edits.push({ editedAt: new Date().toISOString(), before, after });
+      await prisma.storedMedia.update({
+        where: { id: media.id },
+        data: {
+          trainingExampleJson: JSON.stringify({ ...bundle, _edits: edits }),
+          markedForTraining: true,
+        },
+      });
+    }
+  }
+
+  return { ok: true };
+}

@@ -202,3 +202,54 @@ export async function resolveDocumentImportAction(formData: FormData): Promise<R
 
   return { ok: true, message: msg, transactionId: persist.transactionId };
 }
+
+export async function persistReceiptSplitAction(
+  chatTurnId: string,
+  items: { description: string; category: string; amount: number; currency: string; direction: "in" | "out" }[],
+): Promise<{ ok: boolean; message: string }> {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false, message: "Unauthorized" };
+
+  const [wallets, categories] = await Promise.all([
+    prisma.wallet.findMany({
+      where: { userId: session.user.id },
+      orderBy: [{ isDefault: "desc" }, { sortOrder: "asc" }],
+    }),
+    prisma.category.findMany({ where: { userId: session.user.id } }),
+  ]);
+  const wallet = wallets.find((w) => w.isDefault) ?? wallets[0];
+  if (!wallet) return { ok: false, message: "No wallet configured." };
+
+  const saved: string[] = [];
+  for (const item of items) {
+    if (!item.amount || item.amount <= 0) continue;
+    const cat = categories.find(
+      (c) => c.name.toLowerCase() === item.category.toLowerCase() || c.slug === item.category.toLowerCase(),
+    ) ?? categories.find((c) => c.slug === "other");
+    await prisma.transaction.create({
+      data: {
+        userId: session.user.id,
+        walletId: wallet.id,
+        categoryId: cat?.id ?? null,
+        amountCents: Math.round(Math.abs(item.amount) * 100),
+        direction: item.direction,
+        currency: item.currency.toUpperCase(),
+        merchant: null,
+        memo: item.description.slice(0, 2000),
+        occurredAt: new Date(),
+        recurrence: "one_time",
+        status: "posted",
+        source: "chat_receipt_split",
+      },
+    });
+    saved.push(`${item.category}: ${item.currency} ${item.amount.toFixed(2)}`);
+  }
+
+  // Clear the pending flag on linked media
+  await prisma.storedMedia.updateMany({
+    where: { userId: session.user.id, chatTurnId },
+    data: { pendingImportJson: null },
+  });
+
+  return { ok: true, message: `Saved ${saved.length} split entr${saved.length === 1 ? "y" : "ies"}: ${saved.join(", ")}.` };
+}

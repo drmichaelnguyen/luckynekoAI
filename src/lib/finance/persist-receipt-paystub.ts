@@ -75,10 +75,24 @@ function asNumber(v: unknown, currencyHint?: string | null): number | null {
   return null;
 }
 
-function parseOccurredAt(iso: string | null): Date {
+function parseOccurredAt(iso: string | null | undefined): Date {
   if (!iso) return new Date();
-  const d = new Date(iso);
+  // Date-only strings (YYYY-MM-DD) are parsed as UTC by JS, shifting by timezone.
+  // Append noon local time to keep the date stable across all timezones.
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(iso.trim()) ? `${iso.trim()}T12:00:00` : iso;
+  const d = new Date(normalized);
   return Number.isNaN(d.getTime()) ? new Date() : d;
+}
+
+/** Try multiple date fields in priority order; fall back to today only if all are null. */
+function resolveDate(...candidates: (string | null | undefined)[]): Date {
+  for (const c of candidates) {
+    if (c) {
+      const d = parseOccurredAt(c);
+      if (d.getFullYear() > 2000) return d;
+    }
+  }
+  return new Date();
 }
 
 function lineItemsMemo(receipt: Record<string, unknown>): string | null {
@@ -129,7 +143,7 @@ export async function persistReceiptLedgerEntry(
   const categoryId = other?.id ?? null;
 
   const merchant = asString(receipt.merchant);
-  const occurredAt = parseOccurredAt(asString(receipt.purchaseDate));
+  const occurredAt = resolveDate(asString(receipt.purchaseDate), asString(receipt.date), asString(receipt.transactionDate));
   const tax = asNumber(receipt.taxTotal, currency);
   const sub = asNumber(receipt.subtotal, currency);
   const memoParts = [
@@ -197,8 +211,12 @@ export async function persistPaystubLedgerEntry(
   const categoryId = income?.id ?? null;
 
   const employer = asString(paystub.employerName);
-  const periodEnd = asString(paystub.payPeriodEnd) ?? asString(paystub.payPeriodStart);
-  const occurredAt = parseOccurredAt(periodEnd);
+  // Prefer the actual pay date, then period end, then period start
+  const occurredAt = resolveDate(
+    asString(paystub.payDate),
+    asString(paystub.payPeriodEnd),
+    asString(paystub.payPeriodStart),
+  );
   const gross = asNumber(paystub.grossPay, currency);
   const memo = [
     gross != null ? `Gross: ${gross}` : null,

@@ -40,6 +40,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           email: user.email,
           name: user.name ?? user.email.split("@")[0] ?? "Friend",
           nickname: user.nickname,
+          role: user.role,
           image: user.avatarRelativePath ? "/api/user/avatar" : undefined,
         };
       },
@@ -51,9 +52,10 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         token.sub = user.id;
         token.email = user.email;
         if (user.name) token.name = user.name;
-        const u = user as { nickname?: string | null; image?: string | null };
+        const u = user as { nickname?: string | null; image?: string | null; role?: string | null };
         token.nickname = u.nickname ?? null;
         token.picture = u.image ?? undefined;
+        token.role = u.role ?? "user";
       }
       if (trigger === "update" && session && typeof session === "object") {
         const s = session as {
@@ -73,6 +75,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         if (token.email) session.user.email = token.email as string;
         if (typeof token.name === "string") session.user.name = token.name;
         session.user.nickname = (token.nickname as string | null | undefined) ?? null;
+        session.user.role = (token.role as string | null | undefined) ?? "user";
         session.user.image =
           typeof token.picture === "string" && token.picture.length > 0 ? token.picture : undefined;
       }

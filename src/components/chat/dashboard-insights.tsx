@@ -19,6 +19,7 @@ type WalletRow = {
   incomeCents: number;
 };
 import { getLedgerDashboardDrilldownAction } from "@/actions/dashboard";
+import { TransactionDetailDrawer } from "@/components/chat/transaction-detail-drawer";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -159,6 +160,7 @@ export function DashboardInsights({
   const [drillData, setDrillData] = useState<Extract<DashboardDrilldownResult, { ok: true }> | null>(null);
   const [drillError, setDrillError] = useState<string | null>(null);
   const [drillPending, startDrill] = useTransition();
+  const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
 
   const loadDrill = useCallback(
     (sel: DrillSelection) => {
@@ -281,7 +283,12 @@ export function DashboardInsights({
                           drillData.transactions.map((t) => (
                             <li
                               key={t.id}
-                              className="flex flex-col gap-0.5 rounded-md border bg-muted/20 px-2 py-1.5"
+                              className="flex cursor-pointer flex-col gap-0.5 rounded-md border bg-muted/20 px-2 py-1.5 transition hover:bg-muted/50 active:scale-[0.99]"
+                              onClick={() => setSelectedTxId(t.id)}
+                              role="button"
+                              tabIndex={0}
+                              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setSelectedTxId(t.id); }}
+                              aria-label={`Edit transaction: ${t.merchant ?? t.memo ?? "entry"}`}
                             >
                               <div className="flex justify-between gap-2">
                                 <span className="font-medium text-foreground">
@@ -430,6 +437,12 @@ export function DashboardInsights({
           </AnimatePresence>
         </>
       )}
+
+      <TransactionDetailDrawer
+        transactionId={selectedTxId}
+        onClose={() => setSelectedTxId(null)}
+        onSaved={() => setSelectedTxId(null)}
+      />
     </div>
   );
 }
