@@ -6,10 +6,12 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 
 import { LuckyNekoMascot } from "@/components/mascot/lucky-neko";
+import { useLocale } from "@/contexts/locale-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 export function LoginForm() {
+  const { t } = useLocale();
   const router = useRouter();
   const searchParams = useSearchParams();
   const from = searchParams.get("from") || "/";
@@ -36,7 +38,7 @@ export function LoginForm() {
           (("error" in result && Boolean(result.error)) ||
             ("ok" in result && result.ok === false)));
       if (failed) {
-        setError("Wrong email or password.");
+        setError(t("login_error_credentials"));
         return;
       }
       router.push(safeFrom);
@@ -55,10 +57,8 @@ export function LoginForm() {
         <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-50 ring-1 ring-amber-200/80 dark:bg-amber-950/40 dark:ring-amber-800/60">
           <LuckyNekoMascot variant="hero" celebrateOnMount={false} />
         </div>
-        <h1 className="text-xl font-semibold tracking-tight">Welcome back</h1>
-        <p className="max-w-sm text-sm text-muted-foreground">
-          Sign in to NekoZeni with the email you used to register.
-        </p>
+        <h1 className="text-xl font-semibold tracking-tight">{t("login_title")}</h1>
+        <p className="max-w-sm text-sm text-muted-foreground">{t("login_subtitle")}</p>
       </div>
 
       <form
@@ -67,7 +67,7 @@ export function LoginForm() {
       >
         <div className="space-y-2">
           <label htmlFor="email" className="text-sm font-medium">
-            Email
+            {t("login_email")}
           </label>
           <Input
             id="email"
@@ -82,7 +82,7 @@ export function LoginForm() {
         </div>
         <div className="space-y-2">
           <label htmlFor="password" className="text-sm font-medium">
-            Password
+            {t("login_password")}
           </label>
           <Input
             id="password"
@@ -98,12 +98,21 @@ export function LoginForm() {
         </div>
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
         <Button type="submit" className="w-full" disabled={pending}>
-          {pending ? "Signing in…" : "Sign in"}
+          {pending ? t("login_submit_pending") : t("login_submit")}
         </Button>
         <p className="text-center text-sm text-muted-foreground">
-          No account?{" "}
+          {t("login_no_account")}{" "}
           <Link href={registerHref} className="font-medium text-primary underline-offset-4 hover:underline">
-            Create one
+            {t("login_create_one")}
+          </Link>
+        </p>
+        <p className="text-center text-xs text-muted-foreground">
+          <Link
+            href="/guide"
+            className="font-medium text-primary underline-offset-4 hover:underline"
+            aria-label={t("guide_link_aria")}
+          >
+            {t("guide_link_label")}
           </Link>
         </p>
       </form>

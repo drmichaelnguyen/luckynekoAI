@@ -15,12 +15,14 @@ import {
   rejectPendingTransactionAction,
 } from "@/actions/finance";
 import { DashboardInsights } from "@/components/chat/dashboard-insights";
+import { ToolsPlansTab } from "@/components/chat/tools-plans-tab";
+import { ToolsProfileTab } from "@/components/chat/tools-profile-tab";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
-type Tab = "dashboard" | "import" | "confirm" | "wallets" | "backup";
+type Tab = "dashboard" | "import" | "confirm" | "wallets" | "plans" | "profile" | "backup";
 
 const MAX_CSV_PREVIEW_ROWS = 80;
 
@@ -152,20 +154,24 @@ export function AdvancedToolsPanel({
             <h2 id="advanced-tools-title" className="text-sm font-semibold">
               Advanced tools
             </h2>
-            <p className="text-xs text-muted-foreground">Dashboard · import · backup · wallets · confirmations</p>
+            <p className="text-xs text-muted-foreground">
+              Dashboard · import · confirm · wallets · plans · profile · backup
+            </p>
           </div>
           <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close">
             <PanelRightClose className="h-5 w-5" />
           </Button>
         </div>
 
-        <div className="flex gap-1 border-b px-2 py-2">
+        <div className="flex gap-1 overflow-x-auto border-b px-2 py-2 scrollbar-thin">
           {(
             [
               ["dashboard", "Dashboard"],
-              ["import", "Import CSV"],
+              ["import", "Import"],
               ["confirm", "Confirm"],
               ["wallets", "Wallets"],
+              ["plans", "Plans"],
+              ["profile", "Profile"],
               ["backup", "Backup"],
             ] as const
           ).map(([id, label]) => (
@@ -174,7 +180,7 @@ export function AdvancedToolsPanel({
               type="button"
               size="sm"
               variant={tab === id ? "secondary" : "ghost"}
-              className="min-w-0 flex-1 text-[10px] sm:text-sm"
+              className="min-w-0 shrink-0 flex-1 text-[10px] sm:text-sm"
               onClick={() => setTab(id)}
             >
               {label}
@@ -391,18 +397,27 @@ export function AdvancedToolsPanel({
             </div>
           ) : null}
 
+          {tab === "plans" ? <ToolsPlansTab active={tab === "plans"} onChanged={refresh} /> : null}
+
+          {tab === "profile" ? <ToolsProfileTab active={tab === "profile"} /> : null}
+
           {tab === "backup" ? (
             <div className="space-y-4 text-sm">
               <p className="text-xs leading-relaxed text-muted-foreground">
-                Your wallets, categories, transactions, recurring series, and import batches are stored under your
-                account only. Download a JSON backup anytime, or restore from a file you previously exported while
-                signed in with the <span className="font-medium text-foreground">same email</span>.
+                Your wallets, categories, transactions, recurring series, import batches, financial plans, and{" "}
+                <span className="font-medium text-foreground">saved receipt / image uploads</span> from chat live
+                under your account. Download JSON (ledger only) or a full ZIP (ledger + files + a training manifest).
+                Restore only from exports you made while signed in with the{" "}
+                <span className="font-medium text-foreground">same email</span>.
               </p>
 
               <div className="rounded-xl border bg-card p-3">
                 <div className="text-xs font-medium text-foreground">Download backup</div>
                 <p className="mt-1 text-[11px] text-muted-foreground">
-                  Saves everything ledger-related (not your password). Keep the file private.
+                  JSON: ledger tables only. ZIP: same JSON plus <code className="text-foreground">media/</code> files
+                  and <code className="text-foreground">training_manifest.json</code> for optional future model
+                  training (each file has <code className="text-foreground">trainingOptIn</code>, off by default). Neither
+                  includes your password. Keep exports private.
                 </p>
                 <Button
                   type="button"
@@ -429,26 +444,63 @@ export function AdvancedToolsPanel({
                         a.download = name;
                         a.click();
                         URL.revokeObjectURL(url);
-                        setBackupMsg("Backup downloaded.");
+                        setBackupMsg("Ledger JSON downloaded.");
                       })();
                     });
                   }}
                 >
                   <Download className="h-4 w-4" />
-                  Download JSON
+                  Download ledger (JSON)
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="mt-2 w-full gap-2"
+                  disabled={isPending}
+                  onClick={() => {
+                    startTransition(() => {
+                      void (async () => {
+                        setBackupMsg(null);
+                        const res = await fetch("/api/user/backup?full=1", {
+                          method: "GET",
+                          credentials: "same-origin",
+                        });
+                        if (!res.ok) {
+                          const j = (await res.json().catch(() => null)) as { error?: string } | null;
+                          setBackupMsg(j?.error ?? `Download failed (${res.status}).`);
+                          return;
+                        }
+                        const blob = await res.blob();
+                        const cd = res.headers.get("Content-Disposition");
+                        const match = cd?.match(/filename="([^"]+)"/);
+                        const name = match?.[1] ?? "neko-zeni-full-backup.zip";
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = name;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                        setBackupMsg("Full ZIP backup downloaded.");
+                      })();
+                    });
+                  }}
+                >
+                  <Download className="h-4 w-4" />
+                  Download full backup (ZIP)
                 </Button>
               </div>
 
               <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-3">
                 <div className="text-xs font-medium text-destructive">Restore from backup</div>
                 <p className="mt-1 text-[11px] text-muted-foreground">
-                  Replaces all wallets, categories, transactions, batches, and recurring series for this account.
-                  Cannot be undone.
+                  Replaces all wallets, categories, transactions, batches, and recurring series. A{" "}
+                  <span className="font-medium text-foreground">.zip</span> from “full backup” also replaces saved
+                  chat images/PDFs for this account. Cannot be undone.
                 </p>
                 <input
                   ref={restoreInputRef}
                   type="file"
-                  accept=".json,application/json"
+                  accept=".json,application/json,.zip,application/zip"
                   className="mt-2 max-w-full text-xs"
                 />
                 <label className="mt-3 flex cursor-pointer items-start gap-2 text-xs">
@@ -469,7 +521,7 @@ export function AdvancedToolsPanel({
                     const input = restoreInputRef.current;
                     const file = input?.files?.[0];
                     if (!file) {
-                      setBackupMsg("Choose a backup .json file first.");
+                      setBackupMsg("Choose a backup .json or .zip file first.");
                       return;
                     }
                     setBackupMsg(null);

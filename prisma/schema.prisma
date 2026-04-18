@@ -12,6 +12,10 @@ model User {
   email        String   @unique
   passwordHash String
   name         String?
+  /// Optional name the assistant uses in chat (falls back to name, then email local-part).
+  nickname     String?
+  /// Relative path under avatar storage root, e.g. `{userId}/avatar.jpg`
+  avatarRelativePath String?
   /// false until the user finishes first-run onboarding (new accounts set explicitly).
   onboardingCompleted Boolean @default(true)
   /// Primary reporting currency for wallets & chat context.
@@ -24,6 +28,67 @@ model User {
   transactions     Transaction[]
   recurrentSeries  RecurrentSeries[]
   importBatches    ImportBatch[]
+  storedMedia      StoredMedia[]
+  financialPlans   FinancialPlan[]
+}
+
+enum PlanKind {
+  spending_budget
+  savings_goal
+}
+
+enum PlanPeriod {
+  none
+  weekly
+  monthly
+  yearly
+}
+
+/// User-defined spending caps and savings targets for chat context and personal planning.
+model FinancialPlan {
+  id            String     @id @default(cuid())
+  userId        String
+  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind          PlanKind
+  title         String
+  description   String?
+  /// Spending: max per `period` in minor units; savings: target amount in minor units (nullable = qualitative only).
+  amountCents   Int?
+  currency      String     @default("CAD")
+  period        PlanPeriod @default(none)
+  targetDate    DateTime?
+  sortOrder     Int        @default(0)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([userId])
+}
+
+/// Saved bytes for chat uploads (receipts, paystubs, images). Paths are under local MEDIA_STORAGE_DIR.
+model StoredMedia {
+  id                 String   @id @default(cuid())
+  userId             String
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt          DateTime @default(now())
+  mimeType           String
+  originalFilename   String
+  byteSize           Int
+  sha256             String
+  /// Relative to media storage root, e.g. `{userId}/{id}.pdf`
+  relativePath       String
+  source             String   @default("chat")
+  /// Groups files from one chat submission.
+  chatTurnId         String?
+  documentKind       String?
+  transactionId      String?
+  /// When true, user allows this asset to be used in future model training / fine-tuning (off by default).
+  trainingOptIn      Boolean  @default(false)
+  /// Small JSON snapshot of extracted labels for training pipelines (not full model output).
+  structuredExcerpt  String?
+
+  @@index([userId, createdAt])
+  @@index([chatTurnId])
+  @@index([transactionId])
 }
 
 enum WalletKind {

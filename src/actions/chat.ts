@@ -1,11 +1,22 @@
 "use server";
 
 import { GoogleGenerativeAI, type Part } from "@google/generative-ai";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
 import { auth } from "@/auth";
 import { persistFreeformLedgerEntry } from "@/lib/finance/persist-from-chat";
 import { ensureFinanceSeed, financeContextLines } from "@/lib/finance/seed";
+import { maybeCompressImageForStorage } from "@/lib/media/compress-image-for-storage";
+import {
+  assertAllowedChatMime,
+  assertUploadSize,
+  sanitizeOriginalFilename,
+  sha256Hex,
+  unlinkUserMediaRelative,
+  writeUserMediaFile,
+} from "@/lib/media/user-media-storage";
+import type { ConversationTurnForApi } from "@/lib/chat/conversation-context";
 import { prisma } from "@/lib/prisma";
 import {
   acknowledgeShareImport,
@@ -69,9 +80,10 @@ Your JSON MUST match this shape:
 }
 
 Rules:
+- The user message may include USER PREFERENCES (how to address them in chat) and FINANCIAL PLANS (spending budgets and savings goals). Follow those when giving advice; do not ignore a stated monthly cap or savings target without asking first.
 - Choose exactly one primary extraction target: populate ONLY ONE of transaction/receipt/paystub with an object; set the others to null.
 - If the user only typed text describing a purchase, use documentKind "freeform_transaction" and populate transaction.
-- If the uploaded file is a receipt, use documentKind "receipt" and populate receipt with structured expense data suitable for database insertion.
+- If the uploaded file is a clear retail or service purchase receipt or bill (you can read totals and context), use documentKind "receipt" and populate receipt with structured expense data suitable for database insertion.
 - If the uploaded file is a Canadian paystub, use documentKind "canadian_paystub" and populate paystub with payroll fields suitable for database insertion.
 - If you cannot confidently classify the file, use documentKind "unknown_document", set all extraction objects to null, explain briefly in assistantMessage, and ask what it is in followUpQuestion.
 
@@ -104,6 +116,12 @@ Receipt object fields (use null for unknown):
 - paymentMethod: string | null
 - lineItems: array of { description: string | null, quantity: number | null, unitPrice: number | null, lineTotal: number | null }
 
+Receipt / bill uploads — when to ask the user again (not optional):
+- If the image or PDF is clearly NOT a purchase receipt or bill (e.g. unrelated photo, meme, blank page, map, screenshot with no payment, letter, packaging without a payment total you trust), use documentKind "unknown_document", set receipt to null, keep assistantMessage short and honest, and followUpQuestion MUST be one friendly question asking them to upload a legible receipt or briefly type what they spent and where.
+- If it might be a receipt but you are unsure (wrong document, unreadable blur, glare, crop cuts off totals, could be an invoice/quote/return slip instead of a paid receipt, or you would be guessing merchant or total), do NOT invent amounts or a fake merchant: prefer documentKind "unknown_document" with extraction nulls and followUpQuestion asking what this is or to retake the photo — OR use documentKind "receipt" only with null for any field you cannot read, and followUpQuestion MUST ask for the doubtful or missing piece (e.g. exact total, store name, or date).
+- If total OR merchant would require guessing, leave them null and set followUpQuestion (do not fill plausible guesses).
+- When you use "unknown_document" because the file is not a bill or is confusing, followUpQuestion must never be null.
+
 Canadian paystub object fields (use null for unknown; amounts are numeric):
 - employerName: string | null
 - payPeriodStart: string | null (ISO date)
@@ -117,18 +135,59 @@ Canadian paystub object fields (use null for unknown; amounts are numeric):
 - otherDeductions: array of { name: string, amount: number | null }
 
 Follow-ups:
-- If important fields are missing or ambiguous (example: category), set followUpQuestion to ONE short, friendly question.
-- If you have everything you need, set followUpQuestion to null.
+- If important fields are missing or ambiguous (example: category, or receipt total/merchant as above), set followUpQuestion to ONE short, friendly question.
+- If you have everything you need and the document type is clear, set followUpQuestion to null.
+
+Conversation memory:
+- The user message may include a CONVERSATION SUMMARY (financial facts only) plus RECENT CHAT TURNS from earlier today. Use them for continuity (amounts discussed, categories chosen, corrections). If USER LEDGER CONTEXT disagrees with chat memory, trust the ledger as the saved source of truth.
 
 assistantMessage should be a concise, human summary of what you understood (1-3 sentences), not raw JSON.`;
+
+const ConversationTurnSchema = z.object({
+  role: z.enum(["user", "assistant"]),
+  content: z.string(),
+  extractionNote: z.string().optional(),
+});
 
 function buildUserPrompt(input: {
   message: string;
   shareContext?: { title?: string; text?: string; url?: string };
   financeContext?: string;
+  conversation?: {
+    packedFinancialSummary: string | null;
+    recentPriorTurns: ConversationTurnForApi[];
+  };
 }): string {
   const lines: string[] = [];
-  lines.push("User message:");
+
+  if (input.conversation) {
+    const pack = (input.conversation.packedFinancialSummary ?? "").trim();
+    const turns = input.conversation.recentPriorTurns;
+    if (pack.length > 0 || turns.length > 0) {
+      lines.push("CONVERSATION CONTEXT (same calendar day)");
+      if (pack.length > 0) {
+        lines.push("");
+        lines.push("Earlier today — financial facts only (auto-summarized):");
+        lines.push(pack);
+      }
+      if (turns.length > 0) {
+        lines.push("");
+        lines.push("Recent chat (oldest first; current message is below separately):");
+        for (const t of turns) {
+          const tag = t.role === "user" ? "User" : "Assistant";
+          lines.push(`${tag}: ${t.content}`);
+          if (t.extractionNote) {
+            lines.push(`(Structured extraction excerpt): ${t.extractionNote}`);
+          }
+        }
+      }
+      lines.push("");
+      lines.push("---");
+      lines.push("");
+    }
+  }
+
+  lines.push("User message (this request — may repeat the latest user line from recent chat when there are attachments):");
   lines.push(input.message || "(empty)");
 
   if (input.shareContext && (input.shareContext.title || input.shareContext.text || input.shareContext.url)) {
@@ -184,6 +243,37 @@ export async function handleChatInput(formData: FormData) {
     };
   }
 
+  const packedRaw = String(formData.get("conversationPackedSummary") ?? "").trim();
+  const historyRaw = String(formData.get("conversationHistoryJson") ?? "").trim();
+
+  let packedFinancialSummary: string | null = null;
+  if (packedRaw.length > 0) {
+    packedFinancialSummary = packedRaw.slice(0, 12_000);
+  }
+
+  let recentPriorTurns: ConversationTurnForApi[] = [];
+  if (historyRaw.length > 0) {
+    try {
+      const parsed = JSON.parse(historyRaw) as unknown;
+      if (Array.isArray(parsed)) {
+        const turns: ConversationTurnForApi[] = [];
+        for (const item of parsed.slice(0, 39)) {
+          const one = ConversationTurnSchema.safeParse(item);
+          if (one.success) {
+            turns.push({
+              role: one.data.role,
+              content: one.data.content.slice(0, 16_000),
+              extractionNote: one.data.extractionNote?.slice(0, 4000),
+            });
+          }
+        }
+        recentPriorTurns = turns;
+      }
+    } catch {
+      recentPriorTurns = [];
+    }
+  }
+
   await ensureFinanceSeed(prisma, session.user.id);
   const financeContext = await financeContextLines(prisma, session.user.id);
 
@@ -208,26 +298,84 @@ export async function handleChatInput(formData: FormData) {
     },
   });
 
-  const prompt = buildUserPrompt({ message, shareContext, financeContext });
+  const prompt = buildUserPrompt({
+    message,
+    shareContext,
+    financeContext,
+    conversation:
+      packedFinancialSummary || recentPriorTurns.length > 0
+        ? { packedFinancialSummary, recentPriorTurns }
+        : undefined,
+  });
   const parts: Part[] = [{ text: prompt }];
 
-  for (const file of files) {
-    const mimeType = file.type || "application/octet-stream";
-    const buffer = Buffer.from(await file.arrayBuffer());
-    parts.push({
-      inlineData: {
-        mimeType,
-        data: buffer.toString("base64"),
-      },
-    });
+  const chatTurnId = files.length > 0 ? randomUUID() : null;
+  const persistedUploads: { id: string; relativePath: string }[] = [];
+
+  try {
+    for (const file of files) {
+      const declaredMime = file.type || "application/octet-stream";
+      let buffer = Buffer.from(await file.arrayBuffer());
+      const { buffer: processed, mimeType } = await maybeCompressImageForStorage(buffer, declaredMime);
+      buffer = processed;
+      assertAllowedChatMime(mimeType);
+      assertUploadSize(buffer.byteLength);
+      const id = randomUUID();
+      const originalFilename = sanitizeOriginalFilename(file.name || "upload");
+      const sha256 = sha256Hex(buffer);
+      const relativePath = await writeUserMediaFile(session.user.id, id, mimeType, buffer);
+      await prisma.storedMedia.create({
+        data: {
+          id,
+          userId: session.user.id,
+          mimeType,
+          originalFilename,
+          byteSize: buffer.byteLength,
+          sha256,
+          relativePath,
+          source: "chat",
+          chatTurnId,
+        },
+      });
+      persistedUploads.push({ id, relativePath });
+      parts.push({
+        inlineData: {
+          mimeType,
+          data: buffer.toString("base64"),
+        },
+      });
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Could not save attachments.";
+    return { ok: false as const, error: msg };
+  }
+
+  const savedIds = persistedUploads.map((p) => p.id);
+
+  async function rollbackChatUploads() {
+    if (savedIds.length === 0) return;
+    for (const p of persistedUploads) {
+      await unlinkUserMediaRelative(p.relativePath);
+    }
+    await prisma.storedMedia.deleteMany({ where: { id: { in: savedIds } } });
   }
 
   try {
     const result = await model.generateContent(parts);
     const rawText = result.response.text();
-    const json = JSON.parse(rawText) as unknown;
+    let json: unknown;
+    try {
+      json = JSON.parse(rawText) as unknown;
+    } catch {
+      await rollbackChatUploads();
+      return {
+        ok: false as const,
+        error: "The model returned invalid JSON. Try again.",
+      };
+    }
     const parsed = GeminiResponseSchema.safeParse(json);
     if (!parsed.success) {
+      await rollbackChatUploads();
       return {
         ok: false as const,
         error: "The model returned an unexpected format. Try again.",
@@ -235,12 +383,65 @@ export async function handleChatInput(formData: FormData) {
     }
 
     const data = parsed.data;
+    const hadFileUpload = files.length > 0;
+    let followUpQuestion =
+      typeof data.followUpQuestion === "string" && data.followUpQuestion.trim().length > 0
+        ? data.followUpQuestion.trim()
+        : null;
+
+    if (hadFileUpload) {
+      if (data.documentKind === "unknown_document" && !followUpQuestion) {
+        followUpQuestion =
+          "I’m not sure what this file is. Is it a purchase receipt? Upload a clearer photo or type what you bought and how much.";
+      }
+      if (
+        data.documentKind === "receipt" &&
+        data.receipt &&
+        typeof data.receipt === "object" &&
+        !Array.isArray(data.receipt)
+      ) {
+        const r = data.receipt as Record<string, unknown>;
+        const totalBad = r.total == null || r.total === "";
+        const merchantBad = r.merchant == null || r.merchant === "";
+        if (totalBad && merchantBad && !followUpQuestion) {
+          followUpQuestion =
+            "I couldn’t read the store or total from this receipt — can you tell me the merchant and amount, or send a clearer picture?";
+        } else if (totalBad && !merchantBad && !followUpQuestion) {
+          followUpQuestion = "What was the total on this receipt?";
+        } else if (merchantBad && !totalBad && !followUpQuestion) {
+          followUpQuestion = "Which store is this receipt from?";
+        }
+      }
+    }
+
     const structured = {
       documentKind: data.documentKind,
       transaction: data.transaction ?? null,
       receipt: data.receipt ?? null,
       paystub: data.paystub ?? null,
     };
+
+    let structuredExcerpt: string | null = null;
+    try {
+      structuredExcerpt = JSON.stringify({
+        documentKind: data.documentKind,
+        transactionPresent: Boolean(data.transaction),
+        receiptPresent: Boolean(data.receipt),
+        paystubPresent: Boolean(data.paystub),
+      }).slice(0, 4000);
+    } catch {
+      structuredExcerpt = null;
+    }
+
+    if (savedIds.length > 0) {
+      await prisma.storedMedia.updateMany({
+        where: { id: { in: savedIds } },
+        data: {
+          documentKind: data.documentKind,
+          structuredExcerpt,
+        },
+      });
+    }
 
     let assistantMessage = data.assistantMessage;
     if (
@@ -263,6 +464,12 @@ export async function handleChatInput(formData: FormData) {
         if (persisted.saved && persisted.detail) {
           assistantMessage = `${assistantMessage}\n\n${persisted.detail}`;
         }
+        if (persisted.saved && persisted.transactionId && savedIds.length > 0) {
+          await prisma.storedMedia.updateMany({
+            where: { id: { in: savedIds } },
+            data: { transactionId: persisted.transactionId },
+          });
+        }
       } catch {
         /* ledger write is best-effort; chat reply still returns */
       }
@@ -272,9 +479,10 @@ export async function handleChatInput(formData: FormData) {
       ok: true as const,
       assistantMessage,
       structured,
-      followUpQuestion: data.followUpQuestion ?? null,
+      followUpQuestion,
     };
   } catch (error) {
+    await rollbackChatUploads();
     const messageText =
       error instanceof Error ? error.message : "Unknown error calling Gemini.";
     return {

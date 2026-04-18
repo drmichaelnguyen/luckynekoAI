@@ -7,23 +7,27 @@ import { useFormStatus } from "react-dom";
 
 import { registerAction, type RegisterState } from "@/actions/register";
 import { LuckyNekoMascot } from "@/components/mascot/lucky-neko";
+import { useLocale } from "@/contexts/locale-context";
+import { registerErrorMessageKey } from "@/lib/i18n/register-errors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 function RegisterSubmit() {
   const { pending } = useFormStatus();
+  const { t } = useLocale();
   return (
     <Button type="submit" className="w-full" disabled={pending}>
-      {pending ? "Creating account…" : "Create account"}
+      {pending ? t("register_submit_pending") : t("register_submit")}
     </Button>
   );
 }
 
 export function RegisterForm() {
+  const { t } = useLocale();
   const searchParams = useSearchParams();
   const from = searchParams.get("from") || "/";
   const safeFrom = from.startsWith("/") && !from.startsWith("//") ? from : "/";
-  const [state, formAction] = useActionState(registerAction, { error: null } satisfies RegisterState);
+  const [state, formAction] = useActionState(registerAction, { errorKey: null } satisfies RegisterState);
 
   const loginHref =
     safeFrom !== "/" ? `/login?from=${encodeURIComponent(safeFrom)}` : "/login";
@@ -34,10 +38,8 @@ export function RegisterForm() {
         <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-50 ring-1 ring-amber-200/80 dark:bg-amber-950/40 dark:ring-amber-800/60">
           <LuckyNekoMascot variant="hero" celebrateOnMount />
         </div>
-        <h1 className="text-xl font-semibold tracking-tight">Create your account</h1>
-        <p className="max-w-sm text-sm text-muted-foreground">
-          One email, one password — your lucky cat treasurer stays private to you.
-        </p>
+        <h1 className="text-xl font-semibold tracking-tight">{t("register_title")}</h1>
+        <p className="max-w-sm text-sm text-muted-foreground">{t("register_subtitle")}</p>
       </div>
 
       <form
@@ -47,7 +49,7 @@ export function RegisterForm() {
         <input type="hidden" name="redirectTo" value={safeFrom} />
         <div className="space-y-2">
           <label htmlFor="email" className="text-sm font-medium">
-            Email
+            {t("register_email")}
           </label>
           <Input
             id="email"
@@ -60,7 +62,7 @@ export function RegisterForm() {
         </div>
         <div className="space-y-2">
           <label htmlFor="password" className="text-sm font-medium">
-            Password
+            {t("register_password")}
           </label>
           <Input
             id="password"
@@ -68,16 +70,27 @@ export function RegisterForm() {
             type="password"
             autoComplete="new-password"
             required
-            placeholder="At least 8 characters"
+            placeholder={t("register_password_hint")}
             minLength={8}
           />
         </div>
-        {state.error ? <p className="text-sm text-destructive">{state.error}</p> : null}
+        {state.errorKey ? (
+          <p className="text-sm text-destructive">{t(registerErrorMessageKey[state.errorKey])}</p>
+        ) : null}
         <RegisterSubmit />
         <p className="text-center text-sm text-muted-foreground">
-          Already have an account?{" "}
+          {t("register_has_account")}{" "}
           <Link href={loginHref} className="font-medium text-primary underline-offset-4 hover:underline">
-            Sign in
+            {t("register_sign_in")}
+          </Link>
+        </p>
+        <p className="text-center text-xs text-muted-foreground">
+          <Link
+            href="/guide"
+            className="font-medium text-primary underline-offset-4 hover:underline"
+            aria-label={t("guide_link_aria")}
+          >
+            {t("guide_link_label")}
           </Link>
         </p>
       </form>

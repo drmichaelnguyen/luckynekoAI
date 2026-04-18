@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { signIn } from "@/auth";
+import type { RegisterErrorKey } from "@/lib/i18n/register-errors";
 import { prisma } from "@/lib/prisma";
 
 const RegisterSchema = z.object({
@@ -13,7 +14,7 @@ const RegisterSchema = z.object({
   redirectTo: z.string().max(2048).optional(),
 });
 
-export type RegisterState = { error: string | null };
+export type RegisterState = { errorKey: RegisterErrorKey | null };
 
 export async function registerAction(
   _prev: RegisterState | undefined,
@@ -27,22 +28,16 @@ export async function registerAction(
 
   if (!parsed.success) {
     const fe = parsed.error.flatten().fieldErrors;
-    return {
-      error:
-        fe.email?.[0] ??
-        fe.password?.[0] ??
-        "Use a valid email and a password of at least 8 characters.",
-    };
+    if (fe.email?.[0]) return { errorKey: "validation_email" };
+    if (fe.password?.[0]) return { errorKey: "validation_password" };
+    return { errorKey: "validation_default" };
   }
 
   const { email, password, redirectTo } = parsed.data;
   const normalized = email.toLowerCase().trim();
 
   if (!process.env.AUTH_SECRET?.trim()) {
-    return {
-      error:
-        "Sign-in is not configured (AUTH_SECRET is missing). Copy .env.example to .env, set AUTH_SECRET — for example run: openssl rand -base64 32 — then restart the dev server.",
-    };
+    return { errorKey: "auth_secret_missing" };
   }
 
   const passwordHash = await hash(password, 12);
@@ -60,12 +55,12 @@ export async function registerAction(
   } catch (e: unknown) {
     const code = typeof e === "object" && e !== null && "code" in e ? (e as { code?: string }).code : undefined;
     if (code === "P2002") {
-      return { error: "An account with this email already exists." };
+      return { errorKey: "duplicate_email" };
     }
     if (process.env.NODE_ENV === "development") {
       console.error("[register] prisma.user.create failed", e);
     }
-    return { error: "Could not create account. Try again." };
+    return { errorKey: "create_failed" };
   }
 
   let signInResult: Awaited<ReturnType<typeof signIn>>;
@@ -79,10 +74,7 @@ export async function registerAction(
     if (process.env.NODE_ENV === "development") {
       console.error("[register] signIn threw after user create", e);
     }
-    return {
-      error:
-        "Your account was created, but automatic sign-in failed. Open Sign in and log in with the same email and password.",
-    };
+    return { errorKey: "signin_autocreate_failed" };
   }
 
   const signInFailed =
@@ -92,7 +84,7 @@ export async function registerAction(
       ("ok" in signInResult && signInResult.ok === false));
 
   if (signInFailed) {
-    return { error: "Account created — please sign in." };
+    return { errorKey: "signin_manual" };
   }
 
   const safePath = redirectTo?.startsWith("/") && !redirectTo.startsWith("//") ? redirectTo : "/";

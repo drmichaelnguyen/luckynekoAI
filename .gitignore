@@ -31,6 +31,10 @@ yarn-error.log*
 prisma/dev.db
 prisma/dev.db-journal
 
+# user-uploaded images / PDFs (chat, etc.)
+storage/user-media/
+storage/user-avatars/
+
 # typescript
 next-env.d.ts
 

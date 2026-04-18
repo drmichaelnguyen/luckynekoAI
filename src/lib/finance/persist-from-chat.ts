@@ -33,15 +33,15 @@ export async function persistFreeformLedgerEntry(
   userId: string,
   transaction: Record<string, unknown>,
   rawStructuredJson: string,
-): Promise<{ saved: boolean; detail: string }> {
+): Promise<{ saved: boolean; detail: string; transactionId?: string }> {
   const amountRaw = asNumber(transaction.amount);
   if (amountRaw === null || amountRaw === 0) {
-    return { saved: false, detail: "" };
+    return { saved: false, detail: "", transactionId: undefined };
   }
 
   const amountAbsCents = Math.round(Math.abs(amountRaw) * 100);
   if (amountAbsCents <= 0) {
-    return { saved: false, detail: "" };
+    return { saved: false, detail: "", transactionId: undefined };
   }
 
   let direction: FlowDirection = "out";
@@ -61,7 +61,7 @@ export async function persistFreeformLedgerEntry(
   });
   const defaultWallet = wallets.find((w) => w.isDefault) ?? wallets[0];
   if (!defaultWallet) {
-    return { saved: false, detail: "No wallet configured." };
+    return { saved: false, detail: "No wallet configured.", transactionId: undefined };
   }
   let wallet = defaultWallet;
   if (walletLabel) {
@@ -105,7 +105,7 @@ export async function persistFreeformLedgerEntry(
   const notes = asString(transaction.notes);
   const occurredAt = parseOccurredAt(asString(transaction.transactionDate) ?? asString(transaction.occurredAt));
 
-  await db.transaction.create({
+  const created = await db.transaction.create({
     data: {
       userId,
       walletId: wallet.id,
@@ -128,5 +128,5 @@ export async function persistFreeformLedgerEntry(
     status === "pending_user"
       ? `Saved as pending (${wallet.name}) — open Tools → Confirm to say if it repeats.`
       : `Saved to ${wallet.name} · ${categoryName ?? "Other"}.`;
-  return { saved: true, detail };
+  return { saved: true, detail, transactionId: created.id };
 }

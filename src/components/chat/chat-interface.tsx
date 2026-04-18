@@ -1,11 +1,24 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { ImagePlus, Loader2, LogOut, Paperclip, SendHorizontal, User } from "lucide-react";
+import {
+  BookOpen,
+  ImagePlus,
+  Loader2,
+  LogOut,
+  Mic,
+  Paperclip,
+  SendHorizontal,
+  Square,
+  User,
+  Volume2,
+} from "lucide-react";
 import { signOut, useSession } from "next-auth/react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 
+import { packFinancialConversationAction } from "@/actions/chat-pack-context";
 import {
   acknowledgeShareImportAction,
   getShareImportAction,
@@ -13,16 +26,49 @@ import {
 } from "@/actions/chat";
 import { getPendingConfirmCountAction } from "@/actions/finance";
 import { AdvancedToolsButton, AdvancedToolsPanel } from "@/components/chat/advanced-tools-panel";
+import { DailySpendCheckinBanner } from "@/components/chat/daily-spend-checkin-banner";
 import { LuckyNekoAvatar, LuckyNekoMascot } from "@/components/mascot/lucky-neko";
+import { useLocale } from "@/contexts/locale-context";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import type { ChatAttachmentMeta, ChatMessage } from "@/types/chat";
+import {
+  computePackTailStart,
+  historyWithoutWelcome,
+  messageToTurnForApi,
+  recentPriorTurnsForApi,
+} from "@/lib/chat/conversation-context";
+import { localCalendarYmd } from "@/lib/date/local-ymd";
+import { useDailySpendCheckin } from "@/hooks/use-daily-spend-checkin";
+import { useVoiceChat } from "@/hooks/use-voice-chat";
 import { cn } from "@/lib/utils";
 
 function randomId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
+
+function defaultWelcomeMessages(): ChatMessage[] {
+  return [
+    {
+      id: "welcome",
+      role: "assistant",
+      content:
+        "Hi — I’m NekoZeni, your little lucky-cat treasurer. Tell me what you bought, or upload a receipt or Canadian paystub. I’ll extract structured fields and ask a quick follow-up if anything important is missing.",
+    },
+  ];
+}
+
+const CHAT_DAY_STORAGE_KEY = "nekozen:chatDayCtx:v1";
+
+type ChatDayStoredV1 = {
+  v: 1;
+  ymd: string;
+  userId: string;
+  packedFinancialSummary: string;
+  packedThroughIndex: number;
+  messages: ChatMessage[];
+};
 
 function base64ToFile(part: {
   base64: string;
@@ -37,20 +83,19 @@ function base64ToFile(part: {
   return new File([bytes], part.name, { type: part.mimeType });
 }
 
+type ChatSendResult =
+  | { ok: true; speakText: string }
+  | { ok: false; error: string; restoreComposer: boolean };
+
 export function ChatInterface() {
+  const { t, locale } = useLocale();
   const router = useRouter();
   const searchParams = useSearchParams();
   const importId = searchParams.get("importId");
   const { data: session, status } = useSession();
 
-  const [messages, setMessages] = useState<ChatMessage[]>(() => [
-    {
-      id: "welcome",
-      role: "assistant",
-      content:
-        "Hi — I’m NekoZeni, your little lucky-cat treasurer. Tell me what you bought, or upload a receipt or Canadian paystub. I’ll extract structured fields and ask a quick follow-up if anything important is missing.",
-    },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => defaultWelcomeMessages());
+  const messagesRef = useRef(messages);
 
   const [draft, setDraft] = useState("");
   const [files, setFiles] = useState<File[]>([]);
@@ -59,10 +104,112 @@ export function ChatInterface() {
   >(undefined);
 
   const [isPending, startTransition] = useTransition();
+  const [chatBusy, setChatBusy] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [pendingConfirmCount, setPendingConfirmCount] = useState(0);
+  const [packedFinancialSummary, setPackedFinancialSummary] = useState("");
+  const [packedThroughIndex, setPackedThroughIndex] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const packedSummaryRef = useRef("");
+  const packedThroughRef = useRef(0);
+  const chatHydratedKeyRef = useRef<string>("");
+  const lastSessionUserIdRef = useRef<string | null>(null);
+
+  const { visible: spendCheckinVisible, acknowledge: acknowledgeSpendCheckin } = useDailySpendCheckin(
+    status === "authenticated",
+  );
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    packedSummaryRef.current = packedFinancialSummary;
+    packedThroughRef.current = packedThroughIndex;
+  }, [packedFinancialSummary, packedThroughIndex]);
+
+  useEffect(() => {
+    if (status !== "authenticated" || !session?.user?.id) {
+      if (status === "unauthenticated") {
+        lastSessionUserIdRef.current = null;
+      }
+      return;
+    }
+    const uid = session.user.id;
+    if (lastSessionUserIdRef.current && lastSessionUserIdRef.current !== uid) {
+      setMessages(defaultWelcomeMessages());
+      setPackedFinancialSummary("");
+      setPackedThroughIndex(0);
+      chatHydratedKeyRef.current = "";
+    }
+    lastSessionUserIdRef.current = uid;
+  }, [status, session?.user?.id]);
+
+  useEffect(() => {
+    if (status !== "authenticated" || !session?.user?.id || typeof window === "undefined") return;
+    const ymd = localCalendarYmd(new Date());
+    const key = `${session.user.id}:${ymd}`;
+    if (chatHydratedKeyRef.current === key) return;
+    try {
+      const raw = localStorage.getItem(CHAT_DAY_STORAGE_KEY);
+      if (!raw) {
+        chatHydratedKeyRef.current = key;
+        return;
+      }
+      const data = JSON.parse(raw) as ChatDayStoredV1;
+      if (data.v !== 1 || data.userId !== session.user.id) {
+        chatHydratedKeyRef.current = key;
+        return;
+      }
+      if (data.ymd !== ymd) {
+        try {
+          localStorage.removeItem(CHAT_DAY_STORAGE_KEY);
+        } catch {
+          /* ignore */
+        }
+        setMessages(defaultWelcomeMessages());
+        setPackedFinancialSummary("");
+        setPackedThroughIndex(0);
+        chatHydratedKeyRef.current = key;
+        return;
+      }
+      if (Array.isArray(data.messages) && data.messages.length > 0) {
+        setMessages(data.messages);
+        setPackedFinancialSummary(typeof data.packedFinancialSummary === "string" ? data.packedFinancialSummary : "");
+        setPackedThroughIndex(
+          typeof data.packedThroughIndex === "number" && data.packedThroughIndex >= 0
+            ? data.packedThroughIndex
+            : 0,
+        );
+      }
+    } catch {
+      /* ignore corrupt storage */
+    }
+    chatHydratedKeyRef.current = key;
+  }, [status, session?.user?.id]);
+
+  useEffect(() => {
+    if (status !== "authenticated" || !session?.user?.id || typeof window === "undefined") return;
+    const ymd = localCalendarYmd(new Date());
+    const handle = window.setTimeout(() => {
+      try {
+        const payload: ChatDayStoredV1 = {
+          v: 1,
+          ymd,
+          userId: session.user.id,
+          packedFinancialSummary,
+          packedThroughIndex,
+          messages,
+        };
+        localStorage.setItem(CHAT_DAY_STORAGE_KEY, JSON.stringify(payload));
+      } catch {
+        /* quota / private mode */
+      }
+    }, 500);
+    return () => window.clearTimeout(handle);
+  }, [messages, packedFinancialSummary, packedThroughIndex, status, session?.user?.id]);
 
   const refreshPendingCount = useCallback(() => {
     void getPendingConfirmCountAction().then((r) => {
@@ -154,29 +301,73 @@ export function ChatInterface() {
     setFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const submit = () => {
-    const trimmed = draft.trim();
-    if (!trimmed && files.length === 0) return;
+  const handleDailySpendLog = useCallback(() => {
+    const prefix = `${t("daily_spend_draft_prefix")} `;
+    setDraft((prev) => (prev.trim() ? prev : prefix));
+    acknowledgeSpendCheckin();
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, [acknowledgeSpendCheckin, t]);
 
-    const userMessage: ChatMessage = {
-      id: randomId(),
-      role: "user",
-      content: trimmed || "(attachment only)",
-      attachments: attachmentSummary.length ? attachmentSummary : undefined,
-    };
+  const executeChatSend = useCallback(
+    async (args: {
+      trimmed: string;
+      snapshotMessages: ChatMessage[];
+      outgoingFiles: File[];
+      outgoingShare: { title?: string; text?: string; url?: string } | undefined;
+      attachmentMeta: ChatAttachmentMeta[];
+    }): Promise<ChatSendResult> => {
+      const { trimmed, snapshotMessages, outgoingFiles, outgoingShare, attachmentMeta } = args;
+      if (!trimmed && outgoingFiles.length === 0) {
+        return { ok: false, error: "Add a message or attach a file.", restoreComposer: false };
+      }
 
-    setMessages((prev) => [...prev, userMessage]);
-    setDraft("");
+      setChatBusy(true);
+      try {
+        const hist = historyWithoutWelcome(snapshotMessages);
+        const userMessage: ChatMessage = {
+          id: randomId(),
+          role: "user",
+          content: trimmed || "(attachment only)",
+          attachments: attachmentMeta.length ? attachmentMeta : undefined,
+        };
+        const fullIncludingUser = [...hist, userMessage];
 
-    const outgoingFiles = files;
-    const outgoingShare = shareContext;
-    setFiles([]);
-    setShareContext(undefined);
+        setMessages((prev) => [...prev, userMessage]);
 
-    startTransition(() => {
-      void (async () => {
+        const tailStart = computePackTailStart(fullIncludingUser.length);
+        let summary = packedSummaryRef.current;
+        let through = packedThroughRef.current;
+        let packedThisRound = false;
+
+        if (tailStart > through) {
+          const segment = fullIncludingUser.slice(through, tailStart).map(messageToTurnForApi);
+          const packResult = await packFinancialConversationAction({
+            priorSummary: summary.length > 0 ? summary : null,
+            segment,
+          });
+          if (!packResult.ok) {
+            setMessages((prev) => prev.filter((m) => m.id !== userMessage.id));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: randomId(),
+                role: "assistant",
+                content: packResult.error,
+              },
+            ]);
+            return { ok: false, error: packResult.error, restoreComposer: true };
+          }
+          summary = packResult.financialSummary;
+          through = tailStart;
+          packedThisRound = true;
+        }
+
         const formData = new FormData();
         formData.set("message", trimmed);
+        if (summary.length > 0) {
+          formData.set("conversationPackedSummary", summary);
+        }
+        formData.set("conversationHistoryJson", JSON.stringify(recentPriorTurnsForApi(fullIncludingUser)));
         for (const file of outgoingFiles) {
           formData.append("files", file);
         }
@@ -185,6 +376,11 @@ export function ChatInterface() {
         }
 
         const result = await handleChatInput(formData);
+
+        if (packedThisRound) {
+          setPackedFinancialSummary(summary);
+          setPackedThroughIndex(through);
+        }
 
         if (!result.ok) {
           setMessages((prev) => [
@@ -195,7 +391,7 @@ export function ChatInterface() {
               content: result.error,
             },
           ]);
-          return;
+          return { ok: false, error: result.error, restoreComposer: false };
         }
 
         const structuredJson = JSON.stringify(result.structured, null, 2);
@@ -204,17 +400,82 @@ export function ChatInterface() {
           parts.push("");
           parts.push(result.followUpQuestion);
         }
+        const spoken = parts.join("\n");
 
         setMessages((prev) => [
           ...prev,
           {
             id: randomId(),
             role: "assistant",
-            content: parts.join("\n"),
+            content: spoken,
             structuredJson,
           },
         ]);
         refreshPendingCount();
+        return { ok: true, speakText: spoken };
+      } finally {
+        setChatBusy(false);
+      }
+    },
+    [refreshPendingCount],
+  );
+
+  const sendSpokenText = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) {
+        return { ok: false as const, error: "Didn't catch that — try again or speak a bit longer." };
+      }
+      const r = await executeChatSend({
+        trimmed,
+        snapshotMessages: messagesRef.current,
+        outgoingFiles: [],
+        outgoingShare: undefined,
+        attachmentMeta: [],
+      });
+      if (r.ok) return { ok: true as const, speakText: r.speakText };
+      return { ok: false as const, error: r.error };
+    },
+    [executeChatSend],
+  );
+
+  const voice = useVoiceChat({
+    locale,
+    enabled: status === "authenticated",
+    sendSpokenText,
+  });
+
+  const submit = () => {
+    const trimmed = draft.trim();
+    if (!trimmed && files.length === 0) return;
+
+    if (voice.mode !== "off") {
+      voice.stopConversation();
+    }
+
+    const snapshot = messages;
+    const outgoingFiles = files;
+    const outgoingShare = shareContext;
+    const att = attachmentSummary;
+
+    setDraft("");
+    setFiles([]);
+    setShareContext(undefined);
+
+    startTransition(() => {
+      void (async () => {
+        const r = await executeChatSend({
+          trimmed,
+          snapshotMessages: snapshot,
+          outgoingFiles,
+          outgoingShare,
+          attachmentMeta: att,
+        });
+        if (!r.ok && r.restoreComposer) {
+          setDraft(trimmed);
+          setFiles(outgoingFiles);
+          setShareContext(outgoingShare);
+        }
       })();
     });
   };
@@ -223,19 +484,34 @@ export function ChatInterface() {
     <div className="flex min-h-dvh flex-col bg-background">
       <header className="sticky top-0 z-20 border-b bg-background/80 backdrop-blur">
         <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-4 py-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-50 ring-1 ring-amber-200/80 dark:bg-amber-950/40 dark:ring-amber-800/60">
-            <LuckyNekoMascot variant="hero" celebrateOnMount className="drop-shadow-sm" />
+          <div className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-amber-50 ring-1 ring-amber-200/80 dark:bg-amber-950/40 dark:ring-amber-800/60">
+            {status === "authenticated" && session?.user?.image ? (
+              <img src={session.user.image} alt="" className="absolute inset-0 h-full w-full object-cover" />
+            ) : (
+              <LuckyNekoMascot variant="hero" celebrateOnMount className="drop-shadow-sm" />
+            )}
           </div>
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-semibold leading-tight">
-              NekoZeni
+              {status === "authenticated" && session?.user?.name
+                ? session.user.name
+                : status === "authenticated" && session?.user?.email
+                  ? session.user.email.split("@")[0]
+                  : "NekoZeni"}
             </div>
             <div className="truncate text-xs text-muted-foreground">
-              Lucky-cat treasurer • Chat • PWA
+              {status === "authenticated" && session?.user?.nickname
+                ? `Chat as “${session.user.nickname}” · receipts & paystubs`
+                : "Lucky-cat treasurer · Chat · PWA"}
             </div>
           </div>
           {status === "authenticated" && session?.user?.email ? (
             <div className="flex shrink-0 items-center gap-2">
+              <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" asChild title={t("guide_link_label")}>
+                <Link href="/guide" aria-label={t("guide_link_aria")}>
+                  <BookOpen className="h-4 w-4" />
+                </Link>
+              </Button>
               <AdvancedToolsButton pendingCount={pendingConfirmCount} onClick={() => setToolsOpen(true)} />
               <span className="hidden max-w-[11rem] truncate text-xs text-muted-foreground sm:inline">
                 {session.user.email}
@@ -349,7 +625,7 @@ export function ChatInterface() {
               ))}
             </AnimatePresence>
 
-            {isPending ? (
+            {isPending || chatBusy ? (
               <motion.div
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -367,6 +643,15 @@ export function ChatInterface() {
 
       <div className="fixed inset-x-0 bottom-0 z-30 border-t bg-background/90 backdrop-blur supports-[backdrop-filter]:bg-background/70">
         <div className="mx-auto w-full max-w-3xl px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3">
+          <AnimatePresence>
+            {spendCheckinVisible ? (
+              <DailySpendCheckinBanner
+                key="daily-spend-checkin"
+                onLogSpending={handleDailySpendLog}
+                onDismiss={acknowledgeSpendCheckin}
+              />
+            ) : null}
+          </AnimatePresence>
           {files.length > 0 ? (
             <div className="mb-2 flex flex-wrap gap-2">
               {files.map((file, idx) => (
@@ -408,7 +693,43 @@ export function ChatInterface() {
               <span className="hidden text-sm sm:inline">Upload</span>
             </Button>
 
+            {status === "authenticated" ? (
+              voice.mode === "off" ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="shrink-0 px-3"
+                  onClick={() => voice.startVoice()}
+                  disabled={!voice.supported || chatBusy || files.length > 0}
+                  aria-label={t("voice_start_aria")}
+                  title={
+                    !voice.supported
+                      ? t("voice_unsupported_hint")
+                      : files.length > 0
+                        ? t("voice_blocked_attachments")
+                        : t("voice_start_title")
+                  }
+                >
+                  <Mic className="h-5 w-5" />
+                  <span className="hidden text-sm sm:inline">{t("voice_start_title")}</span>
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="shrink-0 gap-1.5 border-destructive/40 px-3 text-destructive hover:bg-destructive/10"
+                  onClick={() => voice.stopConversation()}
+                  aria-label={t("voice_stop_aria")}
+                  title={t("voice_stop_title")}
+                >
+                  <Square className="h-4 w-4 fill-current" />
+                  <span className="hidden text-sm sm:inline">{t("voice_stop_title")}</span>
+                </Button>
+              )
+            ) : null}
+
             <Textarea
+              ref={textareaRef}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               placeholder="Message NekoZeni…"
@@ -427,11 +748,16 @@ export function ChatInterface() {
               size="icon"
               className="shrink-0"
               onClick={submit}
-              disabled={isPending || (!draft.trim() && files.length === 0)}
+              disabled={
+                isPending ||
+                chatBusy ||
+                voice.mode !== "off" ||
+                (!draft.trim() && files.length === 0)
+              }
               aria-label="Send message"
               title="Send"
             >
-              {isPending ? (
+              {isPending || chatBusy ? (
                 <Loader2 className="h-5 w-5 animate-spin" />
               ) : (
                 <SendHorizontal className="h-5 w-5" />
@@ -439,12 +765,35 @@ export function ChatInterface() {
             </Button>
           </div>
 
-          <div className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
-            <Paperclip className="h-3.5 w-3.5" />
-            <span className="leading-snug">
-              Tip: on mobile, install the PWA, then share a photo/PDF directly into NekoZeni from your
-              gallery or files app.
-            </span>
+          <div className="mt-2 space-y-1.5 text-[11px] text-muted-foreground">
+            {voice.mode !== "off" ? (
+              <div className="flex items-center gap-2 font-medium text-foreground">
+                {voice.mode === "listening" ? (
+                  <Mic className="h-3.5 w-3.5 animate-pulse text-amber-600 dark:text-amber-400" />
+                ) : voice.mode === "processing" ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                ) : (
+                  <Volume2 className="h-3.5 w-3.5 animate-pulse text-amber-600 dark:text-amber-400" />
+                )}
+                <span className="leading-snug">
+                  {voice.mode === "listening"
+                    ? t("voice_listening")
+                    : voice.mode === "processing"
+                      ? t("voice_processing")
+                      : t("voice_speaking")}
+                </span>
+              </div>
+            ) : null}
+            <div className="flex items-center gap-2">
+              <Paperclip className="h-3.5 w-3.5 shrink-0" />
+              <span className="leading-snug">
+                Tip: on mobile, install the PWA, then share a photo/PDF directly into NekoZeni from your
+                gallery or files app.
+                {status === "authenticated" && !voice.supported ? (
+                  <> {t("voice_unsupported_hint")}</>
+                ) : null}
+              </span>
+            </div>
           </div>
         </div>
       </div>

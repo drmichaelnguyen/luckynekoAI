@@ -1,5 +1,8 @@
 import type { PrismaClient } from "@prisma/client";
+import { strToU8, unzipSync, zipSync } from "fflate";
 import { z } from "zod";
+
+import { extForMime, readUserMediaFile } from "@/lib/media/user-media-storage";
 
 export const BACKUP_VERSION = 1 as const;
 
@@ -75,6 +78,39 @@ const TransactionRow = z.object({
   updatedAt: z.string(),
 });
 
+const StoredMediaBackupRow = z.object({
+  id: z.string().min(1),
+  mimeType: z.string().min(1).max(120),
+  originalFilename: z.string().min(1).max(240),
+  byteSize: z.number().int().nonnegative(),
+  sha256: z.string().min(32).max(128),
+  createdAt: z.string(),
+  source: z.string().max(32),
+  chatTurnId: z.string().nullable(),
+  documentKind: z.string().max(64).nullable(),
+  transactionId: z.string().nullable(),
+  trainingOptIn: z.boolean(),
+  structuredExcerpt: z.string().max(8000).nullable(),
+  zipEntryPath: z.string().min(1).max(500),
+});
+
+const PlanKindEnum = z.enum(["spending_budget", "savings_goal"]);
+const PlanPeriodEnum = z.enum(["none", "weekly", "monthly", "yearly"]);
+
+const FinancialPlanBackupRow = z.object({
+  id: z.string().min(1),
+  kind: PlanKindEnum,
+  title: z.string().min(1).max(200),
+  description: z.string().max(2000).nullable(),
+  amountCents: z.number().int().nonnegative().nullable(),
+  currency: z.string().min(3).max(3),
+  period: PlanPeriodEnum,
+  targetDate: z.string().nullable(),
+  sortOrder: z.number().int(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
 export const LedgerBackupSchema = z.object({
   version: z.literal(1),
   app: z.literal("neko-zeni"),
@@ -82,11 +118,15 @@ export const LedgerBackupSchema = z.object({
   email: z.string().email(),
   preferredCurrency: z.string().min(3).max(3),
   onboardingCompleted: z.boolean(),
+  profileName: z.string().max(200).nullable().optional(),
+  profileNickname: z.string().max(80).nullable().optional(),
   wallets: z.array(WalletRow).min(1).max(20),
   categories: z.array(CategoryRow).min(1).max(200),
   importBatches: z.array(ImportBatchRow).max(5000),
   recurrentSeries: z.array(RecurrentSeriesRow).max(2000),
   transactions: z.array(TransactionRow).max(50_000),
+  storedMedia: z.array(StoredMediaBackupRow).max(5000).optional(),
+  financialPlans: z.array(FinancialPlanBackupRow).max(500).optional(),
 });
 
 export type LedgerBackup = z.infer<typeof LedgerBackupSchema>;
@@ -104,16 +144,17 @@ export async function buildLedgerBackupJson(
 ): Promise<{ json: string; filename: string }> {
   const user = await db.user.findUnique({
     where: { id: userId },
-    select: { preferredCurrency: true, onboardingCompleted: true },
+    select: { preferredCurrency: true, onboardingCompleted: true, name: true, nickname: true },
   });
   if (!user) throw new Error("User not found");
 
-  const [wallets, categories, importBatches, recurrentSeries, transactions] = await Promise.all([
+  const [wallets, categories, importBatches, recurrentSeries, transactions, financialPlans] = await Promise.all([
     db.wallet.findMany({ where: { userId }, orderBy: { sortOrder: "asc" } }),
     db.category.findMany({ where: { userId }, orderBy: { sortOrder: "asc" } }),
     db.importBatch.findMany({ where: { userId }, orderBy: { createdAt: "asc" } }),
     db.recurrentSeries.findMany({ where: { userId }, orderBy: { createdAt: "asc" } }),
     db.transaction.findMany({ where: { userId }, orderBy: { occurredAt: "asc" } }),
+    db.financialPlan.findMany({ where: { userId }, orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] }),
   ]);
 
   const payload: LedgerBackup = {
@@ -123,6 +164,8 @@ export async function buildLedgerBackupJson(
     email: email.toLowerCase(),
     preferredCurrency: user.preferredCurrency.toUpperCase().slice(0, 3),
     onboardingCompleted: user.onboardingCompleted,
+    profileName: user.name ?? null,
+    profileNickname: user.nickname ?? null,
     wallets: wallets.map((w) => ({
       id: w.id,
       name: w.name,
@@ -183,11 +226,117 @@ export async function buildLedgerBackupJson(
       createdAt: t.createdAt.toISOString(),
       updatedAt: t.updatedAt.toISOString(),
     })),
+    financialPlans: financialPlans.map((p) => ({
+      id: p.id,
+      kind: p.kind,
+      title: p.title,
+      description: p.description,
+      amountCents: p.amountCents,
+      currency: p.currency,
+      period: p.period,
+      targetDate: p.targetDate ? p.targetDate.toISOString().slice(0, 10) : null,
+      sortOrder: p.sortOrder,
+      createdAt: p.createdAt.toISOString(),
+      updatedAt: p.updatedAt.toISOString(),
+    })),
   };
 
   const json = JSON.stringify(payload, null, 2);
   const filename = `neko-zeni-backup-${new Date().toISOString().slice(0, 10)}.json`;
   return { json, filename };
+}
+
+/** ZIP: `ledger.json` (ledger + `storedMedia` manifest), `training_manifest.json`, and `media/*` bytes. */
+export async function buildLedgerBackupZip(
+  db: PrismaClient,
+  userId: string,
+  email: string,
+): Promise<{ buffer: Uint8Array; filename: string }> {
+  const { json } = await buildLedgerBackupJson(db, userId, email);
+  const base = JSON.parse(json) as LedgerBackup;
+
+  const mediaRows = await db.storedMedia.findMany({
+    where: { userId },
+    orderBy: { createdAt: "asc" },
+  });
+
+  const storedMedia = mediaRows.map((m) => {
+    const zipEntryPath = `media/${m.id}${extForMime(m.mimeType)}`;
+    return {
+      id: m.id,
+      mimeType: m.mimeType,
+      originalFilename: m.originalFilename,
+      byteSize: m.byteSize,
+      sha256: m.sha256,
+      createdAt: m.createdAt.toISOString(),
+      source: m.source,
+      chatTurnId: m.chatTurnId,
+      documentKind: m.documentKind,
+      transactionId: m.transactionId,
+      trainingOptIn: m.trainingOptIn,
+      structuredExcerpt: m.structuredExcerpt,
+      zipEntryPath,
+    };
+  });
+
+  const payload: LedgerBackup = { ...base, storedMedia };
+
+  const trainingManifest = {
+    version: 1 as const,
+    app: "neko-zeni",
+    exportedAt: payload.exportedAt,
+    purpose:
+      "Label manifest for optional future model training; images and PDFs are under media/. Only rows with trainingOptIn true are intended for external training use.",
+    items: storedMedia.map((m) => ({
+      id: m.id,
+      zipEntryPath: m.zipEntryPath,
+      mimeType: m.mimeType,
+      originalFilename: m.originalFilename,
+      documentKind: m.documentKind,
+      trainingOptIn: m.trainingOptIn,
+      transactionId: m.transactionId,
+    })),
+  };
+
+  const zipMap: Record<string, Uint8Array> = {
+    "ledger.json": strToU8(JSON.stringify(payload, null, 2)),
+    "training_manifest.json": strToU8(JSON.stringify(trainingManifest, null, 2)),
+  };
+
+  for (const m of mediaRows) {
+    const zipEntryPath = `media/${m.id}${extForMime(m.mimeType)}`;
+    const fileBuf = await readUserMediaFile(m.relativePath);
+    if (fileBuf?.length) {
+      zipMap[zipEntryPath] = new Uint8Array(fileBuf);
+    }
+  }
+
+  const buffer = zipSync(zipMap, { level: 6 });
+  const filename = `neko-zeni-full-backup-${new Date().toISOString().slice(0, 10)}.zip`;
+  return { buffer, filename };
+}
+
+export function isZipMagic(buffer: Uint8Array): boolean {
+  return buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b;
+}
+
+export function parseBackupZip(
+  buffer: Uint8Array,
+): { ok: true; ledgerText: string; mediaFiles: Record<string, Uint8Array> } | { ok: false; error: string } {
+  try {
+    const files = unzipSync(buffer);
+    const ledgerRaw = files["ledger.json"];
+    if (!ledgerRaw?.length) {
+      return { ok: false, error: "ZIP backup is missing ledger.json." };
+    }
+    return {
+      ok: true,
+      ledgerText: new TextDecoder("utf-8").decode(ledgerRaw),
+      mediaFiles: files,
+    };
+  } catch {
+    return { ok: false, error: "Could not read ZIP backup." };
+  }
 }
 
 function assertReferentialIntegrity(data: LedgerBackup): string | null {
@@ -208,12 +357,25 @@ function assertReferentialIntegrity(data: LedgerBackup): string | null {
       return `Transaction ${t.id} references unknown recurrent series.`;
     }
   }
+  const txIds = new Set(data.transactions.map((t) => t.id));
+  for (const m of data.storedMedia ?? []) {
+    if (m.transactionId && !txIds.has(m.transactionId)) {
+      return `Stored media ${m.id} references unknown transaction ${m.transactionId}.`;
+    }
+  }
   return null;
 }
 
 export async function restoreLedgerBackupForUser(
   db: PrismaClient,
-  args: { targetUserId: string; backup: LedgerBackup; expectedEmail: string },
+  args: {
+    targetUserId: string;
+    backup: LedgerBackup;
+    expectedEmail: string;
+    /** When restoring a full ZIP, clears existing uploads and re-imports `storedMedia` + files. */
+    replaceStoredMedia?: boolean;
+    mediaZipFiles?: Record<string, Uint8Array>;
+  },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const email = args.backup.email.toLowerCase().trim();
   if (email !== args.expectedEmail.toLowerCase().trim()) {
@@ -229,8 +391,18 @@ export async function restoreLedgerBackupForUser(
 
   const uid = args.targetUserId;
   const b = args.backup;
+  const replaceMedia = Boolean(args.replaceStoredMedia && args.mediaZipFiles);
+
+  if (replaceMedia) {
+    const { removeUserMediaDirectory } = await import("@/lib/media/user-media-storage");
+    await removeUserMediaDirectory(uid);
+  }
 
   await db.$transaction(async (tx) => {
+    if (replaceMedia) {
+      await tx.storedMedia.deleteMany({ where: { userId: uid } });
+    }
+    await tx.financialPlan.deleteMany({ where: { userId: uid } });
     await tx.transaction.deleteMany({ where: { userId: uid } });
     await tx.recurrentSeries.deleteMany({ where: { userId: uid } });
     await tx.importBatch.deleteMany({ where: { userId: uid } });
@@ -327,14 +499,69 @@ export async function restoreLedgerBackupForUser(
       });
     }
 
+    for (const part of chunk(b.financialPlans ?? [], 100)) {
+      await tx.financialPlan.createMany({
+        data: part.map((p) => ({
+          id: p.id,
+          userId: uid,
+          kind: p.kind,
+          title: p.title,
+          description: p.description,
+          amountCents: p.amountCents,
+          currency: p.currency.toUpperCase().slice(0, 3),
+          period: p.period,
+          targetDate: p.targetDate ? new Date(p.targetDate) : null,
+          sortOrder: p.sortOrder,
+          createdAt: new Date(p.createdAt),
+          updatedAt: new Date(p.updatedAt),
+        })),
+      });
+    }
+
+    const userData: {
+      preferredCurrency: string;
+      onboardingCompleted: boolean;
+      name?: string | null;
+      nickname?: string | null;
+    } = {
+      preferredCurrency: b.preferredCurrency.toUpperCase().slice(0, 3),
+      onboardingCompleted: b.onboardingCompleted,
+    };
+    if ("profileName" in b) userData.name = b.profileName ?? null;
+    if ("profileNickname" in b) userData.nickname = b.profileNickname ?? null;
+
     await tx.user.update({
       where: { id: uid },
-      data: {
-        preferredCurrency: b.preferredCurrency.toUpperCase().slice(0, 3),
-        onboardingCompleted: b.onboardingCompleted,
-      },
+      data: userData,
     });
   });
+
+  if (replaceMedia && b.storedMedia?.length && args.mediaZipFiles) {
+    const { writeUserMediaFile } = await import("@/lib/media/user-media-storage");
+    for (const row of b.storedMedia) {
+      const bytes = args.mediaZipFiles[row.zipEntryPath];
+      if (!bytes?.length) continue;
+      const relativePath = await writeUserMediaFile(uid, row.id, row.mimeType, Buffer.from(bytes));
+      await db.storedMedia.create({
+        data: {
+          id: row.id,
+          userId: uid,
+          mimeType: row.mimeType,
+          originalFilename: row.originalFilename,
+          byteSize: bytes.byteLength,
+          sha256: row.sha256,
+          relativePath,
+          source: row.source || "chat",
+          chatTurnId: row.chatTurnId,
+          documentKind: row.documentKind,
+          transactionId: row.transactionId,
+          trainingOptIn: row.trainingOptIn,
+          structuredExcerpt: row.structuredExcerpt,
+          createdAt: new Date(row.createdAt),
+        },
+      });
+    }
+  }
 
   return { ok: true };
 }

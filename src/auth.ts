@@ -28,7 +28,17 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         const normalized = email.toLowerCase().trim();
         if (!normalized || !password) return null;
 
-        const user = await prisma.user.findUnique({ where: { email: normalized } });
+        const user = await prisma.user.findUnique({
+          where: { email: normalized },
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            nickname: true,
+            passwordHash: true,
+            avatarRelativePath: true,
+          },
+        });
         if (!user?.passwordHash) return null;
 
         const valid = await compare(password, user.passwordHash);
@@ -38,20 +48,42 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           id: user.id,
           email: user.email,
           name: user.name ?? user.email.split("@")[0] ?? "Friend",
+          nickname: user.nickname,
+          image: user.avatarRelativePath ? "/api/user/avatar" : undefined,
         };
       },
     }),
   ],
   callbacks: {
-    jwt({ token, user }) {
-      if (user?.id) token.sub = user.id;
-      if (user?.email) token.email = user.email;
+    jwt({ token, user, trigger, session }) {
+      if (user) {
+        token.sub = user.id;
+        token.email = user.email;
+        if (user.name) token.name = user.name;
+        const u = user as { nickname?: string | null; image?: string | null };
+        token.nickname = u.nickname ?? null;
+        token.picture = u.image ?? undefined;
+      }
+      if (trigger === "update" && session && typeof session === "object") {
+        const s = session as {
+          name?: string | null;
+          nickname?: string | null;
+          image?: string | null;
+        };
+        if (s.name !== undefined) token.name = s.name ?? undefined;
+        if (s.nickname !== undefined) token.nickname = s.nickname ?? null;
+        if (s.image !== undefined) token.picture = s.image ?? undefined;
+      }
       return token;
     },
     session({ session, token }) {
       if (session.user) {
         session.user.id = token.sub ?? "";
         if (token.email) session.user.email = token.email as string;
+        if (typeof token.name === "string") session.user.name = token.name;
+        session.user.nickname = (token.nickname as string | null | undefined) ?? null;
+        session.user.image =
+          typeof token.picture === "string" && token.picture.length > 0 ? token.picture : undefined;
       }
       return session;
     },

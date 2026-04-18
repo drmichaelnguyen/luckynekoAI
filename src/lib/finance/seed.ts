@@ -94,26 +94,62 @@ export async function ensureFinanceSeed(db: PrismaClient, userId: string): Promi
 
 export async function financeContextLines(db: PrismaClient, userId: string): Promise<string> {
   await ensureFinanceSeed(db, userId);
-  const wallets = await db.wallet.findMany({
-    where: { userId },
-    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-    select: { id: true, name: true, kind: true, currency: true, isDefault: true },
-  });
-  const categories = await db.category.findMany({
-    where: { userId },
-    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-    select: { name: true, kind: true, slug: true },
-  });
+  const [user, wallets, categories, plans] = await Promise.all([
+    db.user.findUnique({
+      where: { id: userId },
+      select: { name: true, nickname: true },
+    }),
+    db.wallet.findMany({
+      where: { userId },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+      select: { id: true, name: true, kind: true, currency: true, isDefault: true },
+    }),
+    db.category.findMany({
+      where: { userId },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+      select: { name: true, kind: true, slug: true },
+    }),
+    db.financialPlan.findMany({
+      where: { userId },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    }),
+  ]);
+
+  const address = user?.nickname?.trim() || user?.name?.trim() || "Friend";
+  const prefLines = [
+    "USER PREFERENCES:",
+    `- Address the user naturally as "${address}" in assistantMessage (nickname if set, otherwise name).`,
+    `- Display name on file: ${user?.name ?? "(not set)"}`,
+  ];
+
+  const planLines =
+    plans.length === 0
+      ? ["FINANCIAL PLANS: (none — user can add spending or saving plans under Tools → Plans.)"]
+      : [
+          "FINANCIAL PLANS (respect when advising; amounts in cents when listed):",
+          ...plans.map((p) => {
+            const amt = p.amountCents != null ? `${p.amountCents} ${p.currency}` : "no fixed amount";
+            const per = p.period !== "none" ? ` period:${p.period}` : "";
+            const td = p.targetDate ? ` targetDate:${p.targetDate.toISOString().slice(0, 10)}` : "";
+            const desc = p.description ? ` — ${p.description.slice(0, 240)}` : "";
+            return `- [${p.kind}] ${p.title}: ${amt}${per}${td}${desc}`;
+          }),
+        ];
+
   const wLines = wallets.map(
     (w) =>
       `- ${w.name} (${w.kind}, ${w.currency}${w.isDefault ? ", default" : ""}) [id:${w.id.slice(0, 8)}…]`,
   );
   const cLines = categories.map((c) => `- ${c.name} (${c.kind}, slug:${c.slug})`);
   return [
+    ...prefLines,
+    "",
     "USER LEDGER CONTEXT (use wallet NAME and category NAME from lists; never invent wallet names).",
     "WALLETS:",
     ...wLines,
     "CATEGORIES:",
     ...cLines,
+    "",
+    ...planLines,
   ].join("\n");
 }

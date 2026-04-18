@@ -2,12 +2,12 @@ import { Suspense } from "react";
 
 import { ClientLoading } from "@/components/i18n/client-loading";
 
-import { RegisterForm } from "./register-form";
+import { GuidePageClient } from "./guide-page-client";
 
-export default function RegisterPage() {
+export default function GuidePage() {
   return (
     <Suspense fallback={<ClientLoading />}>
-      <RegisterForm />
+      <GuidePageClient />
     </Suspense>
   );
 }
