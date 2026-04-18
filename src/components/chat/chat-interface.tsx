@@ -1,7 +1,8 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { ImagePlus, Loader2, Paperclip, SendHorizontal, User } from "lucide-react";
+import { ImagePlus, Loader2, LogOut, Paperclip, SendHorizontal, User } from "lucide-react";
+import { signOut, useSession } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 
@@ -10,6 +11,8 @@ import {
   getShareImportAction,
   handleChatInput,
 } from "@/actions/chat";
+import { getPendingConfirmCountAction } from "@/actions/finance";
+import { AdvancedToolsButton, AdvancedToolsPanel } from "@/components/chat/advanced-tools-panel";
 import { LuckyNekoAvatar, LuckyNekoMascot } from "@/components/mascot/lucky-neko";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -38,6 +41,7 @@ export function ChatInterface() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const importId = searchParams.get("importId");
+  const { data: session, status } = useSession();
 
   const [messages, setMessages] = useState<ChatMessage[]>(() => [
     {
@@ -55,8 +59,20 @@ export function ChatInterface() {
   >(undefined);
 
   const [isPending, startTransition] = useTransition();
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [pendingConfirmCount, setPendingConfirmCount] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  const refreshPendingCount = useCallback(() => {
+    void getPendingConfirmCountAction().then((r) => {
+      if (r.ok) setPendingConfirmCount(r.count);
+    });
+  }, []);
+
+  useEffect(() => {
+    refreshPendingCount();
+  }, [refreshPendingCount, toolsOpen]);
 
   const attachmentSummary = useMemo(() => {
     return files.map((file) => ({
@@ -198,6 +214,7 @@ export function ChatInterface() {
             structuredJson,
           },
         ]);
+        refreshPendingCount();
       })();
     });
   };
@@ -209,7 +226,7 @@ export function ChatInterface() {
           <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-50 ring-1 ring-amber-200/80 dark:bg-amber-950/40 dark:ring-amber-800/60">
             <LuckyNekoMascot variant="hero" celebrateOnMount className="drop-shadow-sm" />
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-semibold leading-tight">
               NekoZeni
             </div>
@@ -217,8 +234,32 @@ export function ChatInterface() {
               Lucky-cat treasurer • Chat • PWA
             </div>
           </div>
+          {status === "authenticated" && session?.user?.email ? (
+            <div className="flex shrink-0 items-center gap-2">
+              <AdvancedToolsButton pendingCount={pendingConfirmCount} onClick={() => setToolsOpen(true)} />
+              <span className="hidden max-w-[11rem] truncate text-xs text-muted-foreground sm:inline">
+                {session.user.email}
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5 px-2 sm:px-3"
+                onClick={() => void signOut({ callbackUrl: "/login" })}
+              >
+                <LogOut className="h-4 w-4" />
+                <span className="hidden sm:inline">Sign out</span>
+              </Button>
+            </div>
+          ) : null}
         </div>
       </header>
+
+      <AdvancedToolsPanel
+        open={toolsOpen}
+        onClose={() => setToolsOpen(false)}
+        onBooksChanged={refreshPendingCount}
+      />
 
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-[calc(5.75rem+env(safe-area-inset-bottom))] pt-4">
         <ScrollArea className="min-h-[calc(100dvh-8.25rem)] pr-2">

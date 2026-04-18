@@ -1,0 +1,172 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  /// false until the user finishes first-run onboarding (new accounts set explicitly).
+  onboardingCompleted Boolean @default(true)
+  /// Primary reporting currency for wallets & chat context.
+  preferredCurrency   String  @default("CAD")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  wallets          Wallet[]
+  categories       Category[]
+  transactions     Transaction[]
+  recurrentSeries  RecurrentSeries[]
+  importBatches    ImportBatch[]
+}
+
+enum WalletKind {
+  spending
+  savings
+  credit
+  other
+}
+
+model Wallet {
+  id        String     @id @default(cuid())
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  kind      WalletKind @default(spending)
+  currency  String     @default("CAD")
+  isDefault Boolean    @default(false)
+  sortOrder Int        @default(0)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  transactions    Transaction[]
+  recurrentSeries RecurrentSeries[]
+
+  @@index([userId])
+}
+
+enum CategoryKind {
+  income
+  expense
+  transfer
+}
+
+model Category {
+  id        String       @id @default(cuid())
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  slug      String
+  kind      CategoryKind @default(expense)
+  sortOrder Int          @default(0)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  transactions    Transaction[]
+  recurrentSeries RecurrentSeries[]
+
+  @@unique([userId, slug])
+  @@index([userId])
+}
+
+enum FlowDirection {
+  in
+  out
+}
+
+enum TxRecurrence {
+  one_time
+  recurrent
+}
+
+enum TxStatus {
+  draft
+  pending_user
+  posted
+  rejected
+}
+
+model Transaction {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  walletId    String
+  wallet      Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  categoryId  String?
+  category    Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  amountCents   Int
+  direction     FlowDirection
+  currency      String        @default("CAD")
+  merchant      String?
+  memo          String?
+  occurredAt    DateTime
+  recurrence    TxRecurrence    @default(one_time)
+  status        TxStatus        @default(posted)
+  confirmReason String?
+
+  recurrentSeriesId String?
+  recurrentSeries   RecurrentSeries? @relation(fields: [recurrentSeriesId], references: [id], onDelete: SetNull)
+
+  source            String  @default("chat")
+  importBatchId     String?
+  importBatch       ImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+  rawStructuredJson String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, status])
+  @@index([walletId])
+  @@index([importBatchId])
+}
+
+enum RecurrentCadence {
+  weekly
+  monthly
+  yearly
+  irregular
+}
+
+model RecurrentSeries {
+  id             String           @id @default(cuid())
+  userId         String
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  walletId       String
+  wallet         Wallet           @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  categoryId     String?
+  category       Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  label          String
+  cadence        RecurrentCadence @default(monthly)
+  amountCents    Int
+  direction      FlowDirection
+  nextReminderAt DateTime?
+  isPaused       Boolean          @default(false)
+  notes          String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  transactions Transaction[]
+
+  @@index([userId])
+}
+
+model ImportBatch {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label     String
+  rowCount  Int
+  status    String   @default("completed")
+  createdAt DateTime @default(now())
+
+  transactions Transaction[]
+
+  @@index([userId])
+}

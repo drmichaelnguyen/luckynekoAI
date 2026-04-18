@@ -3,6 +3,10 @@
 import { GoogleGenerativeAI, type Part } from "@google/generative-ai";
 import { z } from "zod";
 
+import { auth } from "@/auth";
+import { persistFreeformLedgerEntry } from "@/lib/finance/persist-from-chat";
+import { ensureFinanceSeed, financeContextLines } from "@/lib/finance/seed";
+import { prisma } from "@/lib/prisma";
 import {
   acknowledgeShareImport,
   getShareImport,
@@ -72,12 +76,23 @@ Rules:
 - If you cannot confidently classify the file, use documentKind "unknown_document", set all extraction objects to null, explain briefly in assistantMessage, and ask what it is in followUpQuestion.
 
 Transaction object fields (use null for unknown):
-- amount: number | null
+- amount: number | null (major currency units, positive for magnitude; use direction for sign semantics)
 - currency: string | null (default CAD when implied)
 - merchant: string | null
-- category: string | null
+- category: string | null (must align with a CATEGORY name from the USER LEDGER CONTEXT appended to the user message)
 - transactionDate: string | null (ISO yyyy-mm-dd if possible)
 - notes: string | null
+- walletLabel: string | null (must match a WALLET name from USER LEDGER CONTEXT; if unsure use "Main")
+- direction: "in" | "out" | null — "in" for income, refunds to the user, transfers in; "out" for spending
+- recurrence: "one_time" | "recurrent" | "unknown"
+- needsUserConfirm: boolean — true if this might be a repeating bill, loan, subscription, or utility charge
+- userConfirmReason: string | null — short reason when needsUserConfirm is true
+- payeeKind: "purchase" | "bill" | "loan" | "subscription" | "utility" | "income" | "transfer" | null
+
+Bookkeeping rules for freeform_transaction:
+- When the user describes everyday shopping, use recurrence "one_time" and needsUserConfirm false unless unclear.
+- For rent, mortgage, car loan, BNPL, phone plan, streaming, insurance, or utilities, prefer recurrence "recurrent" or "unknown" with needsUserConfirm true and a friendly userConfirmReason.
+- Always pick the closest category from the provided list; if none fit, use "Other".
 
 Receipt object fields (use null for unknown):
 - total: number | null
@@ -110,6 +125,7 @@ assistantMessage should be a concise, human summary of what you understood (1-3 
 function buildUserPrompt(input: {
   message: string;
   shareContext?: { title?: string; text?: string; url?: string };
+  financeContext?: string;
 }): string {
   const lines: string[] = [];
   lines.push("User message:");
@@ -123,12 +139,25 @@ function buildUserPrompt(input: {
     if (input.shareContext.url) lines.push(`url: ${input.shareContext.url}`);
   }
 
+  if (input.financeContext) {
+    lines.push("");
+    lines.push(input.financeContext);
+  }
+
   lines.push("");
   lines.push("Return ONLY valid JSON matching the schema described in your system instructions.");
   return lines.join("\n");
 }
 
 export async function handleChatInput(formData: FormData) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return {
+      ok: false as const,
+      error: "Sign in to chat and save entries to your ledger.",
+    };
+  }
+
   const message = String(formData.get("message") ?? "").trim();
   const shareContextRaw = String(formData.get("shareContext") ?? "").trim();
 
@@ -155,6 +184,9 @@ export async function handleChatInput(formData: FormData) {
     };
   }
 
+  await ensureFinanceSeed(prisma, session.user.id);
+  const financeContext = await financeContextLines(prisma, session.user.id);
+
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!apiKey) {
     return {
@@ -176,7 +208,7 @@ export async function handleChatInput(formData: FormData) {
     },
   });
 
-  const prompt = buildUserPrompt({ message, shareContext });
+  const prompt = buildUserPrompt({ message, shareContext, financeContext });
   const parts: Part[] = [{ text: prompt }];
 
   for (const file of files) {
@@ -210,9 +242,35 @@ export async function handleChatInput(formData: FormData) {
       paystub: data.paystub ?? null,
     };
 
+    let assistantMessage = data.assistantMessage;
+    if (
+      data.documentKind === "freeform_transaction" &&
+      data.transaction &&
+      typeof data.transaction === "object" &&
+      !Array.isArray(data.transaction)
+    ) {
+      try {
+        const rawStructuredJson = JSON.stringify({
+          documentKind: data.documentKind,
+          transaction: data.transaction,
+        });
+        const persisted = await persistFreeformLedgerEntry(
+          prisma,
+          session.user.id,
+          data.transaction as Record<string, unknown>,
+          rawStructuredJson,
+        );
+        if (persisted.saved && persisted.detail) {
+          assistantMessage = `${assistantMessage}\n\n${persisted.detail}`;
+        }
+      } catch {
+        /* ledger write is best-effort; chat reply still returns */
+      }
+    }
+
     return {
       ok: true as const,
-      assistantMessage: data.assistantMessage,
+      assistantMessage,
       structured,
       followUpQuestion: data.followUpQuestion ?? null,
     };
