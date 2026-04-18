@@ -4,7 +4,7 @@ import { GoogleGenerativeAI, type Part } from "@google/generative-ai";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
-import { PENDING_IMPORT_VERSION } from "@/actions/document-import";
+import { PENDING_IMPORT_VERSION } from "@/lib/document-import/pending-import-shared";
 import { auth } from "@/auth";
 import { persistFreeformLedgerEntry } from "@/lib/finance/persist-from-chat";
 import { ensureFinanceSeed, financeContextLines } from "@/lib/finance/seed";

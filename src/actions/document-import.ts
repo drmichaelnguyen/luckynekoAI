@@ -5,17 +5,8 @@ import { z } from "zod";
 
 import { auth } from "@/auth";
 import { persistPaystubLedgerEntry, persistReceiptLedgerEntry } from "@/lib/finance/persist-receipt-paystub";
+import type { PendingImportPayloadV1 } from "@/lib/document-import/pending-import-shared";
 import { prisma } from "@/lib/prisma";
-
-export const PENDING_IMPORT_VERSION = 1 as const;
-
-export type PendingImportPayloadV1 = {
-  version: typeof PENDING_IMPORT_VERSION;
-  chatTurnId: string;
-  documentKind: "receipt" | "canadian_paystub";
-  extractedTextSummary: string;
-  proposed: Record<string, unknown>;
-};
 
 const PendingPayloadSchema = z.object({
   version: z.literal(1),
