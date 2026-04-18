@@ -1,15 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import {
-  Bot,
-  ImagePlus,
-  Loader2,
-  Paperclip,
-  SendHorizontal,
-  Sparkles,
-  User,
-} from "lucide-react";
+import { ImagePlus, Loader2, Paperclip, SendHorizontal, User } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 
@@ -18,6 +10,7 @@ import {
   getShareImportAction,
   handleChatInput,
 } from "@/actions/chat";
+import { LuckyNekoAvatar, LuckyNekoMascot } from "@/components/mascot/lucky-neko";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
@@ -51,7 +44,7 @@ export function ChatInterface() {
       id: "welcome",
       role: "assistant",
       content:
-        "Hi — I’m Wallet Buddy. Tell me what you bought, or upload a receipt or Canadian paystub. I’ll extract structured fields and ask a quick follow-up if anything important is missing.",
+        "Hi — I’m NekoZeni, your little lucky-cat treasurer. Tell me what you bought, or upload a receipt or Canadian paystub. I’ll extract structured fields and ask a quick follow-up if anything important is missing.",
     },
   ]);
 
@@ -213,15 +206,15 @@ export function ChatInterface() {
     <div className="flex min-h-dvh flex-col bg-background">
       <header className="sticky top-0 z-20 border-b bg-background/80 backdrop-blur">
         <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-4 py-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
-            <Sparkles className="h-5 w-5" />
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-50 ring-1 ring-amber-200/80 dark:bg-amber-950/40 dark:ring-amber-800/60">
+            <LuckyNekoMascot variant="hero" celebrateOnMount className="drop-shadow-sm" />
           </div>
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold leading-tight">
-              Wallet Buddy AI
+              NekoZeni
             </div>
             <div className="truncate text-xs text-muted-foreground">
-              Chat-first assistant • PWA
+              Lucky-cat treasurer • Chat • PWA
             </div>
           </div>
         </div>
@@ -261,7 +254,7 @@ export function ChatInterface() {
                       {m.role === "user" ? (
                         <User className="h-4 w-4" />
                       ) : (
-                        <Bot className="h-4 w-4" />
+                        <LuckyNekoAvatar className="scale-90" />
                       )}
                     </div>
 
@@ -377,7 +370,7 @@ export function ChatInterface() {
             <Textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
-              placeholder="Message Wallet Buddy…"
+              placeholder="Message NekoZeni…"
               className="min-h-[44px] flex-1"
               rows={2}
               onKeyDown={(e) => {
@@ -408,8 +401,8 @@ export function ChatInterface() {
           <div className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
             <Paperclip className="h-3.5 w-3.5" />
             <span className="leading-snug">
-              Tip: on mobile, install the PWA, then share a photo/PDF directly into Wallet Buddy from
-              your gallery or files app.
+              Tip: on mobile, install the PWA, then share a photo/PDF directly into NekoZeni from your
+              gallery or files app.
             </span>
           </div>
         </div>

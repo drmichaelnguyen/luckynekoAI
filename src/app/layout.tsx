@@ -6,13 +6,13 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
-  applicationName: "Wallet Buddy AI",
+  applicationName: "NekoZeni",
   title: {
-    default: "Wallet Buddy AI",
-    template: "%s | Wallet Buddy AI",
+    default: "NekoZeni",
+    template: "%s | NekoZeni",
   },
   description:
-    "Chat-first finance assistant for transactions, receipts, and Canadian payroll documents.",
+    "NekoZeni — a chat-first lucky-cat treasurer for transactions, receipts, and Canadian payroll documents.",
   manifest: "/manifest.json",
   icons: {
     icon: "/icons/icon.svg",
@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "Wallet Buddy",
+    title: "NekoZeni",
   },
   formatDetection: {
     telephone: false,
@@ -29,7 +29,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#166534",
+  themeColor: "#d97706",
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",

@@ -1,12 +1,12 @@
 {
-  "name": "Wallet Buddy AI",
-  "short_name": "Wallet Buddy",
-  "description": "A chat-first finance assistant for transactions, receipts, and Canadian payroll documents.",
+  "name": "NekoZeni",
+  "short_name": "NekoZeni",
+  "description": "NekoZeni — a chat-first lucky-cat treasurer for transactions, receipts, and Canadian payroll documents.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "background_color": "#ffffff",
-  "theme_color": "#166534",
+  "theme_color": "#d97706",
   "orientation": "portrait-primary",
   "icons": [
     {

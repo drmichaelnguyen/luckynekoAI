@@ -51,7 +51,7 @@ export async function acknowledgeShareImportAction(id: string): Promise<void> {
   acknowledgeShareImport(id.trim());
 }
 
-const SYSTEM_INSTRUCTION = `You are Wallet Buddy AI, a Canadian-friendly finance assistant.
+const SYSTEM_INSTRUCTION = `You are NekoZeni, a friendly lucky-cat-themed Canadian finance assistant.
 You MUST respond with JSON only (no markdown fences).
 
 Your JSON MUST match this shape:
