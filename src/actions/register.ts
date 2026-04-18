@@ -37,6 +37,14 @@ export async function registerAction(
 
   const { email, password, redirectTo } = parsed.data;
   const normalized = email.toLowerCase().trim();
+
+  if (!process.env.AUTH_SECRET?.trim()) {
+    return {
+      error:
+        "Sign-in is not configured (AUTH_SECRET is missing). Copy .env.example to .env, set AUTH_SECRET — for example run: openssl rand -base64 32 — then restart the dev server.",
+    };
+  }
+
   const passwordHash = await hash(password, 12);
 
   try {
@@ -54,14 +62,28 @@ export async function registerAction(
     if (code === "P2002") {
       return { error: "An account with this email already exists." };
     }
+    if (process.env.NODE_ENV === "development") {
+      console.error("[register] prisma.user.create failed", e);
+    }
     return { error: "Could not create account. Try again." };
   }
 
-  const signInResult = await signIn("credentials", {
-    email: normalized,
-    password,
-    redirect: false,
-  });
+  let signInResult: Awaited<ReturnType<typeof signIn>>;
+  try {
+    signInResult = await signIn("credentials", {
+      email: normalized,
+      password,
+      redirect: false,
+    });
+  } catch (e: unknown) {
+    if (process.env.NODE_ENV === "development") {
+      console.error("[register] signIn threw after user create", e);
+    }
+    return {
+      error:
+        "Your account was created, but automatic sign-in failed. Open Sign in and log in with the same email and password.",
+    };
+  }
 
   const signInFailed =
     signInResult &&
