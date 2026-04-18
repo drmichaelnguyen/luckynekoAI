@@ -7,7 +7,7 @@ import { z } from "zod";
 import { PENDING_IMPORT_VERSION } from "@/lib/document-import/pending-import-shared";
 import { auth } from "@/auth";
 import { persistFreeformLedgerEntry } from "@/lib/finance/persist-from-chat";
-import { ensureFinanceSeed, financeContextLines } from "@/lib/finance/seed";
+import { financeContextLines } from "@/lib/finance/seed";
 import { maybeCompressImageForStorage } from "@/lib/media/compress-image-for-storage";
 import {
   assertAllowedChatMime,
@@ -289,25 +289,6 @@ export async function handleChatInput(formData: FormData) {
     }
   }
 
-  // #region agent log
-  fetch("http://127.0.0.1:7302/ingest/8fdf97fd-0211-49ac-852f-9782ab1f5362", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "ac1360" },
-    body: JSON.stringify({
-      sessionId: "ac1360",
-      runId: "run1",
-      hypothesisId: "H3",
-      location: "chat.ts:handleChatInput:preFinanceSeed",
-      message: "prisma singleton before ensureFinanceSeed",
-      data: {
-        hasFinancialPlanOnPrisma: "financialPlan" in (prisma as object),
-        findManyType: typeof (prisma as { financialPlan?: { findMany?: unknown } }).financialPlan?.findMany,
-      },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
-  await ensureFinanceSeed(prisma, session.user.id);
   const financeContext = await financeContextLines(prisma, session.user.id);
 
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;

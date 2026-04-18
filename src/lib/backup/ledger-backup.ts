@@ -1,4 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
+
+import { findUserForLedgerBackupHeader } from "@/lib/prisma/user-select-compat";
 import { strToU8, unzipSync, zipSync } from "fflate";
 import { z } from "zod";
 
@@ -145,11 +147,7 @@ export async function buildLedgerBackupJson(
   userId: string,
   email: string,
 ): Promise<{ json: string; filename: string }> {
-  const user = await db.user.findUnique({
-    where: { id: userId },
-    select: { preferredCurrency: true, onboardingCompleted: true, name: true, nickname: true },
-  });
-  if (!user) throw new Error("User not found");
+  const user = await findUserForLedgerBackupHeader(db, userId);
 
   const [wallets, categories, importBatches, recurrentSeries, transactions, financialPlans] = await Promise.all([
     db.wallet.findMany({ where: { userId }, orderBy: { sortOrder: "asc" } }),

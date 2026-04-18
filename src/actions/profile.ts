@@ -6,6 +6,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { removeAvatarFiles, writeAvatarFromUpload } from "@/lib/media/avatar-storage";
 import { prisma } from "@/lib/prisma";
+import { findUserProfileById, updateUserProfileNameAndNickname } from "@/lib/prisma/user-select-compat";
 
 export type ProfileState = { ok: boolean; error: string | null; message: string | null };
 
@@ -16,10 +17,7 @@ export async function getProfileAction(): Promise<
   const session = await auth();
   if (!session?.user?.id) return { ok: false, error: "Unauthorized." };
 
-  const u = await prisma.user.findUnique({
-    where: { id: session.user.id },
-    select: { name: true, nickname: true, email: true, avatarRelativePath: true },
-  });
+  const u = await findUserProfileById(prisma, session.user.id);
   if (!u) return { ok: false, error: "User not found." };
 
   return {
@@ -44,12 +42,9 @@ export async function updateProfileAction(
     return { ok: false, error: "Name or nickname is too long.", message: null };
   }
 
-  await prisma.user.update({
-    where: { id: session.user.id },
-    data: {
-      name: name || null,
-      nickname: nickname || null,
-    },
+  await updateUserProfileNameAndNickname(prisma, session.user.id, {
+    name: name || null,
+    nickname: nickname || null,
   });
 
   return { ok: true, error: null, message: "Profile saved." };

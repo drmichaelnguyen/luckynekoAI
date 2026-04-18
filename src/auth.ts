@@ -3,6 +3,7 @@ import Credentials from "next-auth/providers/credentials";
 import { compare } from "bcryptjs";
 
 import { prisma } from "@/lib/prisma";
+import { findUserForCredentialsByEmail } from "@/lib/prisma/user-select-compat";
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   trustHost: true,
@@ -28,17 +29,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         const normalized = email.toLowerCase().trim();
         if (!normalized || !password) return null;
 
-        const user = await prisma.user.findUnique({
-          where: { email: normalized },
-          select: {
-            id: true,
-            email: true,
-            name: true,
-            nickname: true,
-            passwordHash: true,
-            avatarRelativePath: true,
-          },
-        });
+        const user = await findUserForCredentialsByEmail(prisma, normalized);
         if (!user?.passwordHash) return null;
 
         const valid = await compare(password, user.passwordHash);

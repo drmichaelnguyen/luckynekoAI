@@ -1,6 +1,7 @@
 import type { PlanKind, PlanPeriod, PrismaClient, WalletKind } from "@prisma/client";
 
 import { slugify } from "@/lib/finance/slug";
+import { findUserNameAndNicknameById } from "@/lib/prisma/user-select-compat";
 
 /** Shape used when building chat finance context (keeps us typed if Prisma client is stale). */
 type FinancialPlanContextRow = {
@@ -19,36 +20,24 @@ async function loadFinancialPlansForContext(
 ): Promise<FinancialPlanContextRow[]> {
   const delegate = (db as unknown as { financialPlan?: { findMany: (args: unknown) => Promise<FinancialPlanContextRow[]> } })
     .financialPlan;
-  // #region agent log
-  fetch("http://127.0.0.1:7302/ingest/8fdf97fd-0211-49ac-852f-9782ab1f5362", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "ac1360" },
-    body: JSON.stringify({
-      sessionId: "ac1360",
-      runId: "run1",
-      hypothesisId: "H1",
-      location: "seed.ts:loadFinancialPlansForContext",
-      message: "financialPlan delegate check",
-      data: {
-        hasDelegateFindMany: typeof delegate?.findMany === "function",
-        prismaModelKeysSample: Object.keys(db as object)
-          .filter((k) => /plan|wallet|user/i.test(k))
-          .slice(0, 12),
-      },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
   if (!delegate?.findMany) {
     console.error(
       "[nekozen] Prisma client has no `financialPlan` model (outdated @prisma/client). Run `npx prisma generate`, restart the dev server, and ensure the DB schema is applied (`npx prisma db push` or migrate).",
     );
     return [];
   }
-  return delegate.findMany({
-    where: { userId },
-    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-  });
+  try {
+    return await delegate.findMany({
+      where: { userId },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    });
+  } catch (e) {
+    console.error(
+      "[nekozen] financialPlan.findMany failed (schema out of date or DB error). Run migrations / prisma db push.",
+      e,
+    );
+    return [];
+  }
 }
 
 const DEFAULT_WALLET_NAMES = ["Main", "Savings", "Credit card"] as const;
@@ -142,93 +131,71 @@ export async function ensureFinanceSeed(db: PrismaClient, userId: string): Promi
 }
 
 export async function financeContextLines(db: PrismaClient, userId: string): Promise<string> {
-  // #region agent log
-  fetch("http://127.0.0.1:7302/ingest/8fdf97fd-0211-49ac-852f-9782ab1f5362", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "ac1360" },
-    body: JSON.stringify({
-      sessionId: "ac1360",
-      runId: "run1",
-      hypothesisId: "H2",
-      location: "seed.ts:financeContextLines:entry",
-      message: "financeContextLines entry (before ensureFinanceSeed)",
-      data: {
-        hasFinancialPlanOnDb: "financialPlan" in (db as object),
-        findManyType: typeof (db as { financialPlan?: { findMany?: unknown } }).financialPlan?.findMany,
-      },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
-  await ensureFinanceSeed(db, userId);
-  const [user, wallets, categories, plans] = await Promise.all([
-    db.user.findUnique({
-      where: { id: userId },
-      select: { name: true, nickname: true },
-    }),
-    db.wallet.findMany({
-      where: { userId },
-      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-      select: { id: true, name: true, kind: true, currency: true, isDefault: true },
-    }),
-    db.category.findMany({
-      where: { userId },
-      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-      select: { name: true, kind: true, slug: true },
-    }),
-    loadFinancialPlansForContext(db, userId),
-  ]);
+  try {
+    await ensureFinanceSeed(db, userId);
+    const [user, wallets, categories, plans] = await Promise.all([
+      findUserNameAndNicknameById(db, userId),
+      db.wallet.findMany({
+        where: { userId },
+        orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+        select: { id: true, name: true, kind: true, currency: true, isDefault: true },
+      }),
+      db.category.findMany({
+        where: { userId },
+        orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+        select: { name: true, kind: true, slug: true },
+      }),
+      loadFinancialPlansForContext(db, userId),
+    ]);
 
-  const address = user?.nickname?.trim() || user?.name?.trim() || "Friend";
-  const prefLines = [
-    "USER PREFERENCES:",
-    `- Address the user naturally as "${address}" in assistantMessage (nickname if set, otherwise name).`,
-    `- Display name on file: ${user?.name ?? "(not set)"}`,
-  ];
+    const address = user?.nickname?.trim() || user?.name?.trim() || "Friend";
+    const prefLines = [
+      "USER PREFERENCES:",
+      `- Address the user naturally as "${address}" in assistantMessage (nickname if set, otherwise name).`,
+      `- Display name on file: ${user?.name ?? "(not set)"}`,
+    ];
 
-  const planLines =
-    plans.length === 0
-      ? ["FINANCIAL PLANS: (none — user can add spending or saving plans under Tools → Plans.)"]
-      : [
-          "FINANCIAL PLANS (respect when advising; amounts in cents when listed):",
-          ...plans.map((p) => {
-            const amt = p.amountCents != null ? `${p.amountCents} ${p.currency}` : "no fixed amount";
-            const per = p.period !== "none" ? ` period:${p.period}` : "";
-            const td = p.targetDate ? ` targetDate:${p.targetDate.toISOString().slice(0, 10)}` : "";
-            const desc = p.description ? ` — ${p.description.slice(0, 240)}` : "";
-            return `- [${p.kind}] ${p.title}: ${amt}${per}${td}${desc}`;
-          }),
-        ];
+    const planLines =
+      plans.length === 0
+        ? ["FINANCIAL PLANS: (none — user can add spending or saving plans under Tools → Plans.)"]
+        : [
+            "FINANCIAL PLANS (respect when advising; amounts in cents when listed):",
+            ...plans.map((p) => {
+              const amt = p.amountCents != null ? `${p.amountCents} ${p.currency}` : "no fixed amount";
+              const per = p.period !== "none" ? ` period:${p.period}` : "";
+              const td = p.targetDate ? ` targetDate:${p.targetDate.toISOString().slice(0, 10)}` : "";
+              const desc = p.description ? ` — ${p.description.slice(0, 240)}` : "";
+              return `- [${p.kind}] ${p.title}: ${amt}${per}${td}${desc}`;
+            }),
+          ];
 
-  const wLines = wallets.map(
-    (w) =>
-      `- ${w.name} (${w.kind}, ${w.currency}${w.isDefault ? ", default" : ""}) [id:${w.id.slice(0, 8)}…]`,
-  );
-  const cLines = categories.map((c) => `- ${c.name} (${c.kind}, slug:${c.slug})`);
-  // #region agent log
-  fetch("http://127.0.0.1:7302/ingest/8fdf97fd-0211-49ac-852f-9782ab1f5362", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "ac1360" },
-    body: JSON.stringify({
-      sessionId: "ac1360",
-      runId: "run1",
-      hypothesisId: "H4",
-      location: "seed.ts:financeContextLines:exit",
-      message: "financeContextLines built context",
-      data: { plansCount: plans.length, walletCount: wallets.length, categoryCount: categories.length },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
-  return [
-    ...prefLines,
-    "",
-    "USER LEDGER CONTEXT (use wallet NAME and category NAME from lists; never invent wallet names).",
-    "WALLETS:",
-    ...wLines,
-    "CATEGORIES:",
-    ...cLines,
-    "",
-    ...planLines,
-  ].join("\n");
+    const wLines = wallets.map(
+      (w) =>
+        `- ${w.name} (${w.kind}, ${w.currency}${w.isDefault ? ", default" : ""}) [id:${w.id.slice(0, 8)}…]`,
+    );
+    const cLines = categories.map((c) => `- ${c.name} (${c.kind}, slug:${c.slug})`);
+    return [
+      ...prefLines,
+      "",
+      "USER LEDGER CONTEXT (use wallet NAME and category NAME from lists; never invent wallet names).",
+      "WALLETS:",
+      ...wLines,
+      "CATEGORIES:",
+      ...cLines,
+      "",
+      ...planLines,
+    ].join("\n");
+  } catch (e) {
+    console.error("[nekozen] financeContextLines failed", e);
+    return [
+      "USER PREFERENCES:",
+      "- Address the user naturally in assistantMessage.",
+      "",
+      "USER LEDGER CONTEXT (metadata could not be loaded; ask the user to retry or check Tools → account).",
+      "WALLETS: (unavailable)",
+      "CATEGORIES: (unavailable)",
+      "",
+      "FINANCIAL PLANS: (unavailable)",
+    ].join("\n");
+  }
 }
