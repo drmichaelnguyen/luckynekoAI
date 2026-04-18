@@ -34,6 +34,8 @@ export type MessageKey =
   | "register_err_signin_manual"
   | "guide_link_label"
   | "guide_link_aria"
+  | "chat_account_title"
+  | "chat_account_aria"
   | "daily_spend_checkin_body"
   | "daily_spend_checkin_hint"
   | "daily_spend_checkin_log"
@@ -86,6 +88,8 @@ const en: Record<MessageKey, string> = {
   register_err_signin_manual: "Account created — please sign in.",
   guide_link_label: "How to use · phone app · share photos",
   guide_link_aria: "Open the guide: using NekoZeni, install as an app, and share from the camera",
+  chat_account_title: "Account & profile",
+  chat_account_aria: "Open account and profile: name, nickname, photo, password",
   daily_spend_checkin_body: "It's 10 PM or later — anything you'd like to log from today?",
   daily_spend_checkin_hint: "A quick note or receipt helps NekoZeni keep your ledger up to date.",
   daily_spend_checkin_log: "Log spending",
@@ -138,6 +142,8 @@ const vi: Record<MessageKey, string> = {
   register_err_signin_manual: "Đã tạo tài khoản — vui lòng đăng nhập.",
   guide_link_label: "Cách dùng · cài trên điện thoại · chia sẻ ảnh",
   guide_link_aria: "Mở hướng dẫn: dùng NekoZeni, cài như app, chia sẻ từ máy ảnh",
+  chat_account_title: "Tài khoản & hồ sơ",
+  chat_account_aria: "Mở tài khoản và hồ sơ: tên, biệt danh, ảnh, mật khẩu",
   daily_spend_checkin_body: "Đã qua 22h — bạn có muốn ghi lại chi tiêu hôm nay không?",
   daily_spend_checkin_hint: "Một dòng ghi chú hoặc ảnh hóa đơn giúp NekoZeni cập nhật sổ chi.",
   daily_spend_checkin_log: "Ghi chi tiêu",

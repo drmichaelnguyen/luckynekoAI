@@ -22,7 +22,16 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
-type Tab = "dashboard" | "import" | "confirm" | "wallets" | "plans" | "profile" | "backup";
+export type AdvancedToolsTabId =
+  | "dashboard"
+  | "import"
+  | "confirm"
+  | "wallets"
+  | "plans"
+  | "profile"
+  | "backup";
+
+type Tab = AdvancedToolsTabId;
 
 const MAX_CSV_PREVIEW_ROWS = 80;
 
@@ -63,10 +72,13 @@ export function AdvancedToolsPanel({
   open,
   onClose,
   onBooksChanged,
+  initialTab,
 }: {
   open: boolean;
   onClose: () => void;
   onBooksChanged?: () => void;
+  /** When the panel opens (or this value changes while open), selects this tab. */
+  initialTab?: AdvancedToolsTabId;
 }) {
   const [tab, setTab] = useState<Tab>("dashboard");
   const [dashboardRange, setDashboardRange] = useState<DashboardRange>("30d");
@@ -130,6 +142,11 @@ export function AdvancedToolsPanel({
       loadDashboard(dashboardRange);
     }
   }, [open, tab, dashboardRange, loadDashboard]);
+
+  useEffect(() => {
+    if (!open) return;
+    setTab(initialTab ?? "dashboard");
+  }, [open, initialTab]);
 
   if (!open) return null;
 

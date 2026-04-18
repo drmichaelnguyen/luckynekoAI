@@ -25,7 +25,11 @@ import {
   handleChatInput,
 } from "@/actions/chat";
 import { getPendingConfirmCountAction } from "@/actions/finance";
-import { AdvancedToolsButton, AdvancedToolsPanel } from "@/components/chat/advanced-tools-panel";
+import {
+  AdvancedToolsButton,
+  AdvancedToolsPanel,
+  type AdvancedToolsTabId,
+} from "@/components/chat/advanced-tools-panel";
 import { DailySpendCheckinBanner } from "@/components/chat/daily-spend-checkin-banner";
 import { DocumentImportBar } from "@/components/chat/document-import-bar";
 import { LuckyNekoAvatar, LuckyNekoMascot } from "@/components/mascot/lucky-neko";
@@ -107,6 +111,7 @@ export function ChatInterface() {
   const [isPending, startTransition] = useTransition();
   const [chatBusy, setChatBusy] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [toolsInitialTab, setToolsInitialTab] = useState<AdvancedToolsTabId>("dashboard");
   const [pendingConfirmCount, setPendingConfirmCount] = useState(0);
   const [pendingDocumentImport, setPendingDocumentImport] = useState<PendingDocumentImport | null>(null);
   const [packedFinancialSummary, setPackedFinancialSummary] = useState("");
@@ -537,7 +542,27 @@ export function ChatInterface() {
                   <BookOpen className="h-4 w-4" />
                 </Link>
               </Button>
-              <AdvancedToolsButton pendingCount={pendingConfirmCount} onClick={() => setToolsOpen(true)} />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 shrink-0"
+                title={t("chat_account_title")}
+                aria-label={t("chat_account_aria")}
+                onClick={() => {
+                  setToolsInitialTab("profile");
+                  setToolsOpen(true);
+                }}
+              >
+                <User className="h-4 w-4" />
+              </Button>
+              <AdvancedToolsButton
+                pendingCount={pendingConfirmCount}
+                onClick={() => {
+                  setToolsInitialTab("dashboard");
+                  setToolsOpen(true);
+                }}
+              />
               <span className="hidden max-w-[11rem] truncate text-xs text-muted-foreground sm:inline">
                 {session.user.email}
               </span>
@@ -558,6 +583,7 @@ export function ChatInterface() {
 
       <AdvancedToolsPanel
         open={toolsOpen}
+        initialTab={toolsInitialTab}
         onClose={() => setToolsOpen(false)}
         onBooksChanged={refreshPendingCount}
       />
