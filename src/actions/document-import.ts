@@ -11,7 +11,7 @@ import { prisma } from "@/lib/prisma";
 const PendingPayloadSchema = z.object({
   version: z.literal(1),
   chatTurnId: z.string(),
-  documentKind: z.enum(["receipt", "canadian_paystub"]),
+  documentKind: z.enum(["receipt", "canadian_paystub", "payroll_document"]),
   extractedTextSummary: z.string(),
   proposed: z.record(z.string(), z.unknown()),
 });
@@ -22,7 +22,7 @@ const MergeSchema = z.object({
 });
 
 async function mergeProposedWithUserCorrections(input: {
-  documentKind: "receipt" | "canadian_paystub";
+  documentKind: "receipt" | "canadian_paystub" | "payroll_document";
   proposed: Record<string, unknown>;
   extractedTextSummary: string;
   correctionText: string;
@@ -65,7 +65,11 @@ Return only valid JSON with a single top-level key "receipt" or "paystub" matchi
     if (input.documentKind === "receipt" && parsed.data.receipt && typeof parsed.data.receipt === "object") {
       return parsed.data.receipt;
     }
-    if (input.documentKind === "canadian_paystub" && parsed.data.paystub && typeof parsed.data.paystub === "object") {
+    if (
+      (input.documentKind === "canadian_paystub" || input.documentKind === "payroll_document") &&
+      parsed.data.paystub &&
+      typeof parsed.data.paystub === "object"
+    ) {
       return parsed.data.paystub;
     }
   } catch {

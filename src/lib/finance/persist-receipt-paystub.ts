@@ -6,10 +6,70 @@ function asString(v: unknown): string | null {
   return null;
 }
 
-function asNumber(v: unknown): number | null {
+function normalizeAmountString(raw: string, currencyHint?: string | null): string | null {
+  const compact = raw
+    .trim()
+    .replace(/\u00a0/g, " ")
+    .replace(/[−–—]/g, "-")
+    .replace(/\s+/g, "")
+    .replace(/[$€£¥₫đ]/gi, "")
+    .replace(/[A-Za-z]+/g, "");
+
+  if (!/[0-9]/.test(compact)) return null;
+
+  const negative =
+    compact.startsWith("-") ||
+    (compact.startsWith("(") && compact.endsWith(")"));
+
+  let digits = compact.replace(/[()\-+]/g, "");
+  if (!/[0-9]/.test(digits)) return null;
+
+  const upperCurrency = currencyHint?.trim().toUpperCase() ?? "";
+  const integerCurrency = upperCurrency === "VND";
+  const commaCount = (digits.match(/,/g) ?? []).length;
+  const dotCount = (digits.match(/\./g) ?? []).length;
+
+  let decimalSeparator: "," | "." | null = null;
+
+  if (commaCount > 0 && dotCount > 0) {
+    decimalSeparator = digits.lastIndexOf(".") > digits.lastIndexOf(",") ? "." : ",";
+  } else if (commaCount > 0 || dotCount > 0) {
+    const candidate = commaCount > 0 ? "," : ".";
+    const count = candidate === "," ? commaCount : dotCount;
+    const idx = digits.lastIndexOf(candidate);
+    const digitsAfter = digits.length - idx - 1;
+    if (!integerCurrency && digitsAfter > 0 && digitsAfter <= 2) {
+      decimalSeparator = candidate;
+    } else if (!integerCurrency && count > 1 && digitsAfter > 0 && digitsAfter <= 2) {
+      decimalSeparator = candidate;
+    }
+  }
+
+  if (decimalSeparator) {
+    const lastDecimalIndex = digits.lastIndexOf(decimalSeparator);
+    const thousandsSeparator = decimalSeparator === "." ? "," : ".";
+    digits = digits.replace(new RegExp(`\\${thousandsSeparator}`, "g"), "");
+    digits = digits
+      .split("")
+      .map((char, index) => {
+        if (char !== decimalSeparator) return char;
+        return index === lastDecimalIndex ? "." : "";
+      })
+      .join("");
+  } else {
+    digits = digits.replace(/[,.]/g, "");
+  }
+
+  if (!/^\d+(\.\d+)?$/.test(digits)) return null;
+  return `${negative ? "-" : ""}${digits}`;
+}
+
+function asNumber(v: unknown, currencyHint?: string | null): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   if (typeof v === "string") {
-    const n = Number.parseFloat(v.replace(/[$,]/g, ""));
+    const normalized = normalizeAmountString(v, currencyHint);
+    if (!normalized) return null;
+    const n = Number.parseFloat(normalized);
     return Number.isFinite(n) ? n : null;
   }
   return null;
@@ -24,12 +84,13 @@ function parseOccurredAt(iso: string | null): Date {
 function lineItemsMemo(receipt: Record<string, unknown>): string | null {
   const items = receipt.lineItems;
   if (!Array.isArray(items) || items.length === 0) return null;
+  const currency = asString(receipt.currency);
   const parts: string[] = [];
   for (const row of items.slice(0, 12)) {
     if (!row || typeof row !== "object") continue;
     const o = row as Record<string, unknown>;
     const d = asString(o.description);
-    const lt = asNumber(o.lineTotal);
+    const lt = asNumber(o.lineTotal, currency);
     if (d || lt != null) parts.push(d ? `${d}${lt != null ? ` ${lt}` : ""}` : `${lt}`);
   }
   const s = parts.join("; ");
@@ -43,7 +104,8 @@ export async function persistReceiptLedgerEntry(
   receipt: Record<string, unknown>,
   rawStructuredJson: string,
 ): Promise<{ saved: boolean; detail: string; transactionId?: string }> {
-  const total = asNumber(receipt.total);
+  const currency = asString(receipt.currency);
+  const total = asNumber(receipt.total, currency);
   if (total === null || total === 0) {
     return { saved: false, detail: "Receipt total is missing or zero.", transactionId: undefined };
   }
@@ -68,8 +130,8 @@ export async function persistReceiptLedgerEntry(
 
   const merchant = asString(receipt.merchant);
   const occurredAt = parseOccurredAt(asString(receipt.purchaseDate));
-  const tax = asNumber(receipt.taxTotal);
-  const sub = asNumber(receipt.subtotal);
+  const tax = asNumber(receipt.taxTotal, currency);
+  const sub = asNumber(receipt.subtotal, currency);
   const memoParts = [
     lineItemsMemo(receipt),
     tax != null ? `Tax: ${tax}` : null,
@@ -85,7 +147,7 @@ export async function persistReceiptLedgerEntry(
       categoryId,
       amountCents: amountAbsCents,
       direction: "out" as FlowDirection,
-      currency: asString(receipt.currency)?.toUpperCase() ?? "CAD",
+      currency: currency?.toUpperCase() ?? "CAD",
       merchant,
       memo,
       occurredAt,
@@ -99,19 +161,20 @@ export async function persistReceiptLedgerEntry(
 
   return {
     saved: true,
-    detail: `Saved receipt to ${wallet.name} · ${merchant ?? "Expense"} · ${(total).toFixed(2)} ${asString(receipt.currency)?.toUpperCase() ?? "CAD"}.`,
+    detail: `Saved receipt to ${wallet.name} · ${merchant ?? "Expense"} · ${(total).toFixed(2)} ${currency?.toUpperCase() ?? "CAD"}.`,
     transactionId: created.id,
   };
 }
 
-/** Persist net pay from a Canadian paystub as income (best-effort single line). */
+/** Persist net pay from a payroll document as income (best-effort single line). */
 export async function persistPaystubLedgerEntry(
   db: PrismaClient,
   userId: string,
   paystub: Record<string, unknown>,
   rawStructuredJson: string,
 ): Promise<{ saved: boolean; detail: string; transactionId?: string }> {
-  const net = asNumber(paystub.netPay);
+  const currency = asString(paystub.currency);
+  const net = asNumber(paystub.netPay, currency);
   if (net === null || net === 0) {
     return { saved: false, detail: "Net pay is missing or zero on this paystub.", transactionId: undefined };
   }
@@ -136,10 +199,10 @@ export async function persistPaystubLedgerEntry(
   const employer = asString(paystub.employerName);
   const periodEnd = asString(paystub.payPeriodEnd) ?? asString(paystub.payPeriodStart);
   const occurredAt = parseOccurredAt(periodEnd);
-  const gross = asNumber(paystub.grossPay);
+  const gross = asNumber(paystub.grossPay, currency);
   const memo = [
     gross != null ? `Gross: ${gross}` : null,
-    asString(paystub.currency) ? `Currency: ${asString(paystub.currency)}` : null,
+    currency ? `Currency: ${currency}` : null,
   ]
     .filter(Boolean)
     .join(" · ")
@@ -152,7 +215,7 @@ export async function persistPaystubLedgerEntry(
       categoryId,
       amountCents: amountAbsCents,
       direction: "in" as FlowDirection,
-      currency: asString(paystub.currency)?.toUpperCase() ?? "CAD",
+      currency: currency?.toUpperCase() ?? "CAD",
       merchant: employer,
       memo: memo || "Paystub net pay",
       occurredAt,

@@ -15,7 +15,7 @@ export type ChatMessage = {
 
 export type PendingDocumentImport = {
   chatTurnId: string;
-  documentKind: "receipt" | "canadian_paystub";
+  documentKind: "receipt" | "canadian_paystub" | "payroll_document";
   extractedTextSummary: string;
 };
 

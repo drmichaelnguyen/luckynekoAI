@@ -32,6 +32,7 @@ const GeminiResponseSchema = z
       "freeform_transaction",
       "receipt",
       "canadian_paystub",
+      "payroll_document",
       "unknown_document",
     ]),
     transaction: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -45,6 +46,12 @@ const GeminiResponseSchema = z
     awaitingLedgerDecision: z.boolean().optional(),
   })
   .passthrough();
+
+const PAYROLL_DOCUMENT_KINDS = ["canadian_paystub", "payroll_document"] as const;
+
+function isPayrollDocumentKind(value: string): value is (typeof PAYROLL_DOCUMENT_KINDS)[number] {
+  return PAYROLL_DOCUMENT_KINDS.includes(value as (typeof PAYROLL_DOCUMENT_KINDS)[number]);
+}
 
 export type ShareImportActionResult =
   | { ok: true; payload: Omit<ShareImportPayload, "expires"> }
@@ -72,12 +79,12 @@ export async function acknowledgeShareImportAction(id: string): Promise<void> {
   acknowledgeShareImport(id.trim());
 }
 
-const SYSTEM_INSTRUCTION = `You are NekoZeni, a friendly lucky-cat-themed Canadian finance assistant.
+const SYSTEM_INSTRUCTION = `You are NekoZeni, a friendly lucky-cat-themed finance assistant for people in Canada and Vietnam.
 You MUST respond with JSON only (no markdown fences).
 
 Your JSON MUST match this shape (optional keys only when relevant):
 {
-  "documentKind": "freeform_transaction" | "receipt" | "canadian_paystub" | "unknown_document",
+  "documentKind": "freeform_transaction" | "receipt" | "payroll_document" | "unknown_document",
   "transaction": null | object,
   "receipt": null | object,
   "paystub": null | object,
@@ -92,15 +99,17 @@ Rules:
 - Choose exactly one primary extraction target: populate ONLY ONE of transaction/receipt/paystub with an object; set the others to null.
 - If the user only typed text describing a purchase, use documentKind "freeform_transaction" and populate transaction.
 - If the uploaded file is a clear retail or service purchase receipt or bill (you can read totals and context), use documentKind "receipt" and populate receipt with structured expense data suitable for database insertion.
-- If the uploaded file is a Canadian paystub, use documentKind "canadian_paystub" and populate paystub with payroll fields suitable for database insertion.
+- If the uploaded file is a payroll or payslip document from Canada or Vietnam, use documentKind "payroll_document" and populate paystub with payroll fields suitable for database insertion.
 - If you cannot confidently classify the file, use documentKind "unknown_document", set all extraction objects to null, explain briefly in assistantMessage, and ask what it is in followUpQuestion.
 
 Uploaded files (images/PDF) — pipeline before anything hits the ledger:
-1) Classify first: is this a financial document about money (retail/service receipt, bill, paid invoice, Canadian paystub, bank or card slip with amounts)? If clearly NO, use documentKind "unknown_document", all extraction objects null, stop — do not pretend it is a receipt.
-2) If YES: use documentKind "receipt" or "canadian_paystub" and populate only that object; use null for unreadable fields instead of guessing.
-3) extractedTextSummary: when documentKind is receipt or canadian_paystub AND the user attached a file, you MUST set this to a plain-text, human-readable readout of the document (merchant lines, dates, line items, taxes, totals, payment method) — like reading the page aloud, not JSON.
-4) awaitingLedgerDecision: set true when there is a file attachment and documentKind is receipt or canadian_paystub. The user must explicitly confirm in the app before a ledger row is created from that upload; do not state that the receipt is already saved in their ledger from the file alone.
+1) Classify first: is this a financial document about money (retail/service receipt, bill, paid invoice, payroll document, bank or card slip with amounts)? If clearly NO, use documentKind "unknown_document", all extraction objects null, stop — do not pretend it is a receipt.
+2) If YES: use documentKind "receipt" or "payroll_document" and populate only that object; use null for unreadable fields instead of guessing.
+3) extractedTextSummary: when documentKind is receipt or payroll_document AND the user attached a file, you MUST set this to a plain-text, human-readable readout of the document (merchant lines, dates, line items, taxes, totals, payment method or payroll sections) — like reading the page aloud, not JSON.
+4) awaitingLedgerDecision: set true when there is a file attachment and documentKind is receipt or payroll_document. The user must explicitly confirm in the app before a ledger row is created from that upload; do not state that the receipt is already saved in their ledger from the file alone.
 5) Typed-only purchases (no file) use freeform_transaction; omit awaitingLedgerDecision or set false.
+6) Amount normalization matters: return numeric amounts, not formatted strings. For VND, return whole-dong numbers like 1250000. For CAD, return decimal numbers like 47.82.
+7) Dates should be normalized to ISO yyyy-mm-dd whenever the document makes the date reasonably clear.
 
 Transaction object fields (use null for unknown):
 - amount: number | null (major currency units, positive for magnitude; use direction for sign semantics)
@@ -137,8 +146,10 @@ Receipt / bill uploads — when to ask the user again (not optional):
 - If total OR merchant would require guessing, leave them null and set followUpQuestion (do not fill plausible guesses).
 - When you use "unknown_document" because the file is not a bill or is confusing, followUpQuestion must never be null.
 
-Canadian paystub object fields (use null for unknown; amounts are numeric):
+Payroll document object fields (use null for unknown; amounts are numeric):
 - employerName: string | null
+- employeeName: string | null
+- payDate: string | null (ISO date)
 - payPeriodStart: string | null (ISO date)
 - payPeriodEnd: string | null (ISO date)
 - grossPay: number | null
@@ -146,8 +157,21 @@ Canadian paystub object fields (use null for unknown; amounts are numeric):
 - incomeTax: number | null
 - cpp: number | null
 - ei: number | null
-- currency: string | null (default CAD)
+- socialInsurance: number | null
+- healthInsurance: number | null
+- unemploymentInsurance: number | null
+- pension: number | null
+- currency: string | null (default CAD for Canadian docs, VND for Vietnamese docs)
 - otherDeductions: array of { name: string, amount: number | null }
+
+Regional cues and examples:
+- Canadian retail receipts often include subtotal, GST, HST, PST, QST, TPS, TVQ, total, debit, visa, mastercard, member number, and store names like Costco, Walmart, FreshCo, T&T, Shoppers.
+- Vietnamese receipts and invoices may include HOA DON, BIEN LAI, GTGT, VAT, MST, thanh tien, tong cong, tien mat, chuyen khoan, tam tinh, giam gia, and dong currency markers VND, d, or dong.
+- Canadian payrolls often include pay period, pay date, gross pay, net pay, CPP/QPP, EI, income tax, vacation pay, taxable benefits, YTD.
+- Vietnamese payrolls often include bang luong, ky luong, luong co ban, tong thu nhap, phu cap, thuong, khau tru, BHXH, BHYT, BHTN, thue TNCN, and thuc linh or luong thuc lanh.
+- Costco receipts can be long and item-dense. If the merchant is readable as Costco, still extract total, subtotal, tax, date, payment method, and a reasonable set of line items instead of giving up because the page is crowded.
+- If the document language appears Vietnamese, prefer VND unless the document clearly states another currency.
+- If the document is bilingual or mixed-language, combine the clues instead of rejecting it.
 
 Follow-ups:
 - If important fields are missing or ambiguous (example: category, or receipt total/merchant as above), set followUpQuestion to ONE short, friendly question.
@@ -166,6 +190,7 @@ const ConversationTurnSchema = z.object({
 
 function buildUserPrompt(input: {
   message: string;
+  hasAttachments: boolean;
   shareContext?: { title?: string; text?: string; url?: string };
   financeContext?: string;
   conversation?: {
@@ -205,6 +230,16 @@ function buildUserPrompt(input: {
   lines.push("User message (this request — may repeat the latest user line from recent chat when there are attachments):");
   lines.push(input.message || "(empty)");
 
+  if (input.hasAttachments) {
+    lines.push("");
+    lines.push("The user attached one or more files.");
+    lines.push(
+      input.message
+        ? "Analyze the attached document(s) together with the user message."
+        : "The typed message is empty, but the attached file still needs full analysis. Do not return an empty response just because the user did not type extra text.",
+    );
+  }
+
   if (input.shareContext && (input.shareContext.title || input.shareContext.text || input.shareContext.url)) {
     lines.push("");
     lines.push("Optional share metadata from the OS share sheet:");
@@ -231,6 +266,7 @@ export async function handleChatInput(formData: FormData) {
       error: "Sign in to chat and save entries to your ledger.",
     };
   }
+  const userId = session.user.id;
 
   const message = String(formData.get("message") ?? "").trim();
   const shareContextRaw = String(formData.get("shareContext") ?? "").trim();
@@ -289,7 +325,7 @@ export async function handleChatInput(formData: FormData) {
     }
   }
 
-  const financeContext = await financeContextLines(prisma, session.user.id);
+  const financeContext = await financeContextLines(prisma, userId);
 
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!apiKey) {
@@ -314,6 +350,7 @@ export async function handleChatInput(formData: FormData) {
 
   const prompt = buildUserPrompt({
     message,
+    hasAttachments: files.length > 0,
     shareContext,
     financeContext,
     conversation:
@@ -336,7 +373,7 @@ export async function handleChatInput(formData: FormData) {
   try {
     for (const file of files) {
       const declaredMime = file.type || "application/octet-stream";
-      let buffer = Buffer.from(await file.arrayBuffer());
+      let buffer: Buffer = Buffer.from(new Uint8Array(await file.arrayBuffer()));
       const { buffer: processed, mimeType } = await maybeCompressImageForStorage(buffer, declaredMime);
       buffer = processed;
       assertAllowedChatMime(mimeType);
@@ -381,11 +418,11 @@ export async function handleChatInput(formData: FormData) {
     for (const att of preparedAttachments) {
       const id = randomUUID();
       const sha256 = sha256Hex(att.buffer);
-      const relativePath = await writeUserMediaFile(session.user.id, id, att.mimeType, att.buffer);
+      const relativePath = await writeUserMediaFile(userId, id, att.mimeType, att.buffer);
       await prisma.storedMedia.create({
         data: {
           id,
-          userId: session.user.id,
+          userId,
           mimeType: att.mimeType,
           originalFilename: att.originalFilename,
           byteSize: att.buffer.byteLength,
@@ -466,8 +503,7 @@ export async function handleChatInput(formData: FormData) {
       extractedTextSummary: data.extractedTextSummary ?? null,
       awaitingLedgerDecision: Boolean(
         data.awaitingLedgerDecision ??
-          (hadFileUpload &&
-            (data.documentKind === "receipt" || data.documentKind === "canadian_paystub")),
+          (hadFileUpload && (data.documentKind === "receipt" || isPayrollDocumentKind(data.documentKind))),
       ),
     };
 
@@ -489,7 +525,7 @@ export async function handleChatInput(formData: FormData) {
     const isFinancialUpload =
       hadFileUpload &&
       chatTurnId &&
-      (data.documentKind === "receipt" || data.documentKind === "canadian_paystub");
+      (data.documentKind === "receipt" || isPayrollDocumentKind(data.documentKind));
 
     if (isFinancialUpload) {
       const proposed =
@@ -498,7 +534,7 @@ export async function handleChatInput(formData: FormData) {
         typeof data.receipt === "object" &&
         !Array.isArray(data.receipt)
           ? (data.receipt as Record<string, unknown>)
-          : data.documentKind === "canadian_paystub" &&
+          : isPayrollDocumentKind(data.documentKind) &&
               data.paystub &&
               typeof data.paystub === "object" &&
               !Array.isArray(data.paystub)
@@ -511,17 +547,23 @@ export async function handleChatInput(formData: FormData) {
           summaryFromModel.length > 0
             ? summaryFromModel
             : data.assistantMessage.trim().slice(0, 2000);
+        const pendingKind: PendingDocumentImport["documentKind"] =
+          data.documentKind === "receipt"
+            ? "receipt"
+            : data.documentKind === "canadian_paystub"
+              ? "canadian_paystub"
+              : "payroll_document";
         const payload = {
           version: PENDING_IMPORT_VERSION,
           chatTurnId,
-          documentKind: data.documentKind,
+          documentKind: pendingKind,
           extractedTextSummary: extracted,
           proposed,
         };
         pendingImportJson = JSON.stringify(payload).slice(0, 500_000);
         pendingDocumentImport = {
           chatTurnId,
-          documentKind: data.documentKind,
+          documentKind: pendingKind,
           extractedTextSummary: extracted,
         };
       }
@@ -555,7 +597,7 @@ export async function handleChatInput(formData: FormData) {
         });
         const persisted = await persistFreeformLedgerEntry(
           prisma,
-          session.user.id,
+          userId,
           data.transaction as Record<string, unknown>,
           rawStructuredJson,
         );

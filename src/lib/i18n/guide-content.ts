@@ -15,7 +15,7 @@ export type GuideContent = {
 const en: GuideContent = {
   title: "How to use NekoZeni",
   lead:
-    "NekoZeni is a chat-first treasurer: talk to it like a message thread, attach receipts or paystubs, and it helps structure what you spent. Your data stays under your account.",
+    "NekoZeni is a chat-first treasurer: talk to it like a message thread, attach receipts, bills, or payroll documents, and it helps structure what you spent. Your data stays under your account.",
   sections: [
     {
       heading: "Basics after you sign in",
@@ -57,7 +57,7 @@ const en: GuideContent = {
       heading: "Tips",
       paragraphs: [],
       bullets: [
-        "Receipts and Canadian paystub photos work best with good lighting and the full receipt in frame.",
+        "Receipts, bills, and payroll photos from Canada or Vietnam work best with good lighting and the full page in frame.",
         "Back up from Tools → Download ledger (JSON) for a small file, or Download full backup (ZIP) to include saved images for restore or your own archives.",
         "Language: use English / Tiếng Việt from the switcher in the top corner (also before login).",
       ],
@@ -68,7 +68,7 @@ const en: GuideContent = {
 const vi: GuideContent = {
   title: "Cách dùng NekoZeni",
   lead:
-    "NekoZeni là trợ lý tài chính dạng chat: bạn nhắn như tin nhắn, đính kèm hóa đơn hoặc phiếu lương, ứng dụng giúp ghi nhận chi tiêu. Dữ liệu nằm trong tài khoản của bạn.",
+    "NekoZeni là trợ lý tài chính dạng chat: bạn nhắn như tin nhắn, đính kèm hóa đơn, chứng từ thanh toán hoặc phiếu lương, ứng dụng giúp ghi nhận chi tiêu. Dữ liệu nằm trong tài khoản của bạn.",
   sections: [
     {
       heading: "Cơ bản sau khi đăng nhập",
@@ -110,7 +110,7 @@ const vi: GuideContent = {
       heading: "Mẹo",
       paragraphs: [],
       bullets: [
-        "Hóa đơn / phiếu lương Canada: chụp đủ sáng, thấy cả tờ trong khung.",
+        "Hóa đơn, chứng từ thanh toán và phiếu lương ở Canada hoặc Việt Nam: chụp đủ sáng và thấy trọn trang trong khung.",
         "Sao lưu: Công cụ → Tải sổ (JSON) cho file nhỏ, hoặc Tải bản đầy đủ (ZIP) gồm cả ảnh đã lưu.",
         "Ngôn ngữ: chuyển English / Tiếng Việt ở góc trên (kể cả trước khi đăng nhập).",
       ],

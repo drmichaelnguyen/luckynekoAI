@@ -20,7 +20,7 @@ export const metadata: Metadata = {
     template: "%s | NekoZeni",
   },
   description:
-    "NekoZeni — a chat-first lucky-cat treasurer for transactions, receipts, and Canadian payroll documents.",
+    "NekoZeni — a chat-first lucky-cat treasurer for transactions, receipts, bills, and payroll documents from Canada or Vietnam.",
   manifest: "/manifest.json",
   icons: {
     icon: "/icons/icon.svg",

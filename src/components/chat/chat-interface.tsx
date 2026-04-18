@@ -59,7 +59,7 @@ function defaultWelcomeMessages(): ChatMessage[] {
       id: "welcome",
       role: "assistant",
       content:
-        "Hi — I’m NekoZeni, your little lucky-cat treasurer. Tell me what you bought, or upload a receipt or Canadian paystub. I’ll extract structured fields and ask a quick follow-up if anything important is missing.",
+        "Hi — I’m NekoZeni, your little lucky-cat treasurer. Tell me what you bought, or upload a receipt, bill, or payroll slip from Canada or Vietnam. I’ll extract the key fields and ask a quick follow-up if anything important is missing.",
     },
   ];
 }
@@ -531,7 +531,7 @@ export function ChatInterface() {
             </div>
             <div className="truncate text-xs text-muted-foreground">
               {status === "authenticated" && session?.user?.nickname
-                ? `Chat as “${session.user.nickname}” · receipts & paystubs`
+                ? `Chat as “${session.user.nickname}” · receipts & payroll docs`
                 : "Lucky-cat treasurer · Chat · PWA"}
             </div>
           </div>
@@ -830,28 +830,38 @@ export function ChatInterface() {
 
           <div className="mt-2 space-y-1.5 text-[11px] text-muted-foreground">
             {voice.mode !== "off" ? (
-              <div className="flex items-center gap-2 font-medium text-foreground">
-                {voice.mode === "listening" ? (
-                  <Mic className="h-3.5 w-3.5 animate-pulse text-amber-600 dark:text-amber-400" />
-                ) : voice.mode === "processing" ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-                ) : (
-                  <Volume2 className="h-3.5 w-3.5 animate-pulse text-amber-600 dark:text-amber-400" />
-                )}
-                <span className="leading-snug">
-                  {voice.mode === "listening"
-                    ? t("voice_listening")
-                    : voice.mode === "processing"
-                      ? t("voice_processing")
-                      : t("voice_speaking")}
-                </span>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 font-medium text-foreground">
+                  {voice.mode === "listening" ? (
+                    <Mic className="h-3.5 w-3.5 animate-pulse text-amber-600 dark:text-amber-400" />
+                  ) : voice.mode === "processing" ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                  ) : (
+                    <Volume2 className="h-3.5 w-3.5 animate-pulse text-amber-600 dark:text-amber-400" />
+                  )}
+                  <span className="leading-snug">
+                    {voice.mode === "listening"
+                      ? t("voice_listening")
+                      : voice.mode === "processing"
+                        ? t("voice_processing")
+                        : t("voice_speaking")}
+                  </span>
+                </div>
+                {voice.transcript ? (
+                  <div className="pl-5 text-foreground/80">
+                    &ldquo;{voice.transcript}&rdquo;
+                  </div>
+                ) : null}
+                {voice.errorMessage ? (
+                  <div className="pl-5 text-destructive">{voice.errorMessage}</div>
+                ) : null}
               </div>
             ) : null}
             <div className="flex items-center gap-2">
               <Paperclip className="h-3.5 w-3.5 shrink-0" />
               <span className="leading-snug">
-                Tip: on mobile, install the PWA, then share a photo/PDF directly into NekoZeni from your
-                gallery or files app.
+                Tip: on mobile, install the PWA, then share a receipt, bill, payroll image, or PDF directly
+                into NekoZeni from your gallery or files app.
                 {status === "authenticated" && !voice.supported ? (
                   <> {t("voice_unsupported_hint")}</>
                 ) : null}

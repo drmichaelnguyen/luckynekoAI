@@ -6,6 +6,7 @@
     "dev": "next dev --turbopack -p 3200",
     "build": "prisma generate && next build",
     "start": "next start -p 3200",
+    "start:stack": "./scripts/run-with-cloudflare.sh",
     "lint": "next lint",
     "postinstall": "prisma generate",
     "db:push": "prisma db push"

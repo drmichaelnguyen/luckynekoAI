@@ -45,10 +45,10 @@ export function DocumentImportBar({ pending, onResolved, onDismiss }: Props) {
   return (
     <div className="rounded-xl border border-amber-200/80 bg-amber-50/90 px-3 py-2.5 dark:border-amber-900/50 dark:bg-amber-950/35">
       <p className="text-xs font-medium text-amber-950 dark:text-amber-50">
-        Receipt / paystub ready — save to your ledger?
+        Receipt / payroll document ready — save to your ledger?
       </p>
       <p className="mt-1 text-[11px] leading-snug text-amber-900/90 dark:text-amber-100/85">
-        {pending.documentKind === "receipt" ? "Receipt" : "Paystub"} · confirm below or describe corrections.
+        {pending.documentKind === "receipt" ? "Receipt" : "Payroll"} · confirm below or describe corrections.
       </p>
       {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
       {!editOpen ? (
