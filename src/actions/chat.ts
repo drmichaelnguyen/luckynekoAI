@@ -289,6 +289,24 @@ export async function handleChatInput(formData: FormData) {
     }
   }
 
+  // #region agent log
+  fetch("http://127.0.0.1:7302/ingest/8fdf97fd-0211-49ac-852f-9782ab1f5362", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "ac1360" },
+    body: JSON.stringify({
+      sessionId: "ac1360",
+      runId: "run1",
+      hypothesisId: "H3",
+      location: "chat.ts:handleChatInput:preFinanceSeed",
+      message: "prisma singleton before ensureFinanceSeed",
+      data: {
+        hasFinancialPlanOnPrisma: "financialPlan" in (prisma as object),
+        findManyType: typeof (prisma as { financialPlan?: { findMany?: unknown } }).financialPlan?.findMany,
+      },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
   await ensureFinanceSeed(prisma, session.user.id);
   const financeContext = await financeContextLines(prisma, session.user.id);
 
@@ -325,6 +343,13 @@ export async function handleChatInput(formData: FormData) {
   const parts: Part[] = [{ text: prompt }];
 
   const chatTurnId = files.length > 0 ? randomUUID() : null;
+  /** In-memory only until a path persists (ledger import staging or a saved freeform transaction). */
+  type PreparedChatAttachment = {
+    buffer: Buffer;
+    mimeType: string;
+    originalFilename: string;
+  };
+  const preparedAttachments: PreparedChatAttachment[] = [];
   const persistedUploads: { id: string; relativePath: string }[] = [];
 
   try {
@@ -335,24 +360,11 @@ export async function handleChatInput(formData: FormData) {
       buffer = processed;
       assertAllowedChatMime(mimeType);
       assertUploadSize(buffer.byteLength);
-      const id = randomUUID();
-      const originalFilename = sanitizeOriginalFilename(file.name || "upload");
-      const sha256 = sha256Hex(buffer);
-      const relativePath = await writeUserMediaFile(session.user.id, id, mimeType, buffer);
-      await prisma.storedMedia.create({
-        data: {
-          id,
-          userId: session.user.id,
-          mimeType,
-          originalFilename,
-          byteSize: buffer.byteLength,
-          sha256,
-          relativePath,
-          source: "chat",
-          chatTurnId,
-        },
+      preparedAttachments.push({
+        buffer,
+        mimeType,
+        originalFilename: sanitizeOriginalFilename(file.name || "upload"),
       });
-      persistedUploads.push({ id, relativePath });
       parts.push({
         inlineData: {
           mimeType,
@@ -361,18 +373,54 @@ export async function handleChatInput(formData: FormData) {
       });
     }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Could not save attachments.";
+    const msg = e instanceof Error ? e.message : "Could not process attachments.";
     return { ok: false as const, error: msg };
   }
 
-  const savedIds = persistedUploads.map((p) => p.id);
+  let persistedAttachmentIds: string[] = [];
 
   async function rollbackChatUploads() {
-    if (savedIds.length === 0) return;
+    if (persistedAttachmentIds.length === 0) return;
     for (const p of persistedUploads) {
       await unlinkUserMediaRelative(p.relativePath);
     }
-    await prisma.storedMedia.deleteMany({ where: { id: { in: savedIds } } });
+    await prisma.storedMedia.deleteMany({ where: { id: { in: persistedAttachmentIds } } });
+    persistedUploads.length = 0;
+    persistedAttachmentIds = [];
+  }
+
+  async function persistPreparedAttachments(
+    data: {
+      documentKind: string;
+      structuredExcerpt: string | null;
+      pendingImportJson?: string | null;
+      transactionId?: string | null;
+    },
+  ): Promise<void> {
+    for (const att of preparedAttachments) {
+      const id = randomUUID();
+      const sha256 = sha256Hex(att.buffer);
+      const relativePath = await writeUserMediaFile(session.user.id, id, att.mimeType, att.buffer);
+      await prisma.storedMedia.create({
+        data: {
+          id,
+          userId: session.user.id,
+          mimeType: att.mimeType,
+          originalFilename: att.originalFilename,
+          byteSize: att.buffer.byteLength,
+          sha256,
+          relativePath,
+          source: "chat",
+          chatTurnId,
+          documentKind: data.documentKind,
+          structuredExcerpt: data.structuredExcerpt,
+          ...(data.pendingImportJson != null ? { pendingImportJson: data.pendingImportJson } : {}),
+          ...(data.transactionId != null ? { transactionId: data.transactionId } : {}),
+        },
+      });
+      persistedUploads.push({ id, relativePath });
+      persistedAttachmentIds.push(id);
+    }
   }
 
   try {
@@ -498,14 +546,11 @@ export async function handleChatInput(formData: FormData) {
       }
     }
 
-    if (savedIds.length > 0) {
-      await prisma.storedMedia.updateMany({
-        where: { id: { in: savedIds } },
-        data: {
-          documentKind: data.documentKind,
-          structuredExcerpt,
-          ...(pendingImportJson ? { pendingImportJson } : {}),
-        },
+    if (pendingImportJson && preparedAttachments.length > 0) {
+      await persistPreparedAttachments({
+        documentKind: data.documentKind,
+        structuredExcerpt,
+        pendingImportJson,
       });
     }
 
@@ -536,10 +581,16 @@ export async function handleChatInput(formData: FormData) {
         if (persisted.saved && persisted.detail) {
           assistantMessage = `${assistantMessage}\n\n${persisted.detail}`;
         }
-        if (persisted.saved && persisted.transactionId && savedIds.length > 0) {
-          await prisma.storedMedia.updateMany({
-            where: { id: { in: savedIds } },
-            data: { transactionId: persisted.transactionId },
+        if (
+          persisted.saved &&
+          persisted.transactionId &&
+          preparedAttachments.length > 0 &&
+          persistedAttachmentIds.length === 0
+        ) {
+          await persistPreparedAttachments({
+            documentKind: data.documentKind,
+            structuredExcerpt,
+            transactionId: persisted.transactionId,
           });
         }
       } catch {

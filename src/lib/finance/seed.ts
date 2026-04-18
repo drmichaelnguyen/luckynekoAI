@@ -19,6 +19,26 @@ async function loadFinancialPlansForContext(
 ): Promise<FinancialPlanContextRow[]> {
   const delegate = (db as unknown as { financialPlan?: { findMany: (args: unknown) => Promise<FinancialPlanContextRow[]> } })
     .financialPlan;
+  // #region agent log
+  fetch("http://127.0.0.1:7302/ingest/8fdf97fd-0211-49ac-852f-9782ab1f5362", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "ac1360" },
+    body: JSON.stringify({
+      sessionId: "ac1360",
+      runId: "run1",
+      hypothesisId: "H1",
+      location: "seed.ts:loadFinancialPlansForContext",
+      message: "financialPlan delegate check",
+      data: {
+        hasDelegateFindMany: typeof delegate?.findMany === "function",
+        prismaModelKeysSample: Object.keys(db as object)
+          .filter((k) => /plan|wallet|user/i.test(k))
+          .slice(0, 12),
+      },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
   if (!delegate?.findMany) {
     console.error(
       "[nekozen] Prisma client has no `financialPlan` model (outdated @prisma/client). Run `npx prisma generate`, restart the dev server, and ensure the DB schema is applied (`npx prisma db push` or migrate).",
@@ -122,6 +142,24 @@ export async function ensureFinanceSeed(db: PrismaClient, userId: string): Promi
 }
 
 export async function financeContextLines(db: PrismaClient, userId: string): Promise<string> {
+  // #region agent log
+  fetch("http://127.0.0.1:7302/ingest/8fdf97fd-0211-49ac-852f-9782ab1f5362", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "ac1360" },
+    body: JSON.stringify({
+      sessionId: "ac1360",
+      runId: "run1",
+      hypothesisId: "H2",
+      location: "seed.ts:financeContextLines:entry",
+      message: "financeContextLines entry (before ensureFinanceSeed)",
+      data: {
+        hasFinancialPlanOnDb: "financialPlan" in (db as object),
+        findManyType: typeof (db as { financialPlan?: { findMany?: unknown } }).financialPlan?.findMany,
+      },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
   await ensureFinanceSeed(db, userId);
   const [user, wallets, categories, plans] = await Promise.all([
     db.user.findUnique({
@@ -167,6 +205,21 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
       `- ${w.name} (${w.kind}, ${w.currency}${w.isDefault ? ", default" : ""}) [id:${w.id.slice(0, 8)}…]`,
   );
   const cLines = categories.map((c) => `- ${c.name} (${c.kind}, slug:${c.slug})`);
+  // #region agent log
+  fetch("http://127.0.0.1:7302/ingest/8fdf97fd-0211-49ac-852f-9782ab1f5362", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "ac1360" },
+    body: JSON.stringify({
+      sessionId: "ac1360",
+      runId: "run1",
+      hypothesisId: "H4",
+      location: "seed.ts:financeContextLines:exit",
+      message: "financeContextLines built context",
+      data: { plansCount: plans.length, walletCount: wallets.length, categoryCount: categories.length },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
   return [
     ...prefLines,
     "",
