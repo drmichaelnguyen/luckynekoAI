@@ -3,6 +3,11 @@
 @tailwind utilities;
 
 @layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
   :root {
     --background: 0 0% 100%;
     --foreground: 240 10% 3.9%;
@@ -50,5 +55,7 @@
 
   body {
     @apply bg-background text-foreground antialiased;
+    /* Avoid accidental horizontal scroll from full-bleed children on narrow viewports */
+    overflow-x: hidden;
   }
 }

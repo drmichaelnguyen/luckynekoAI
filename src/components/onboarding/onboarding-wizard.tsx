@@ -6,6 +6,7 @@ import { useCallback, useMemo, useState, useActionState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { completeOnboardingAction, type OnboardingState } from "@/actions/onboarding";
+import { LanguageSwitcher } from "@/components/i18n/language-switcher";
 import { LuckyNekoMascot } from "@/components/mascot/lucky-neko";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -57,7 +58,10 @@ export function OnboardingWizard() {
     mode === "recommended" || (mode === "custom" && names.slice(0, count).every((n) => n.trim().length > 0));
 
   return (
-    <div className="flex min-h-dvh flex-col bg-gradient-to-b from-amber-50/90 to-background dark:from-amber-950/25">
+    <div className="relative flex min-h-dvh flex-col bg-gradient-to-b from-amber-50/90 to-background dark:from-amber-950/25">
+      <div className="pointer-events-auto absolute right-3 top-3 z-10 sm:right-4 sm:top-4">
+        <LanguageSwitcher />
+      </div>
       <div className="mx-auto flex w-full max-w-md flex-1 flex-col px-4 py-8">
         <div className="mb-6 flex items-center gap-2">
           {["Chào", "Ví", "Tiền tệ", "Xong"].map((label, i) => (

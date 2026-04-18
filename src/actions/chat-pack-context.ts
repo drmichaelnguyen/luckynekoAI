@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { auth } from "@/auth";
 import type { ConversationTurnForApi } from "@/lib/chat/conversation-context";
+import type { Locale } from "@/lib/i18n/config";
 
 const PackResponseSchema = z.object({
   financialSummary: z.string(),
@@ -21,6 +22,13 @@ Rules for financialSummary:
 - Exclude: greetings, jokes, thanks, how-to about the app unless it changes a financial rule the user stated.
 - If there is nothing financial in the segment, return a single sentence like "No additional financial facts in this segment."
 - When a PRIOR SUMMARY is provided, merge it with the NEW SEGMENT: dedupe, update if the user corrected an earlier figure, keep the result under about 4000 characters if possible by dropping stale minor details.`;
+
+const PACK_SYSTEM_VI_APPEND = `
+UI locale: Vietnamese. Write the financialSummary string in Vietnamese (still facts-only, no chit-chat).`;
+
+function packSystemForLocale(locale: Locale | undefined): string {
+  return locale === "vi" ? `${PACK_SYSTEM}${PACK_SYSTEM_VI_APPEND}` : PACK_SYSTEM;
+}
 
 function formatSegment(turns: ConversationTurnForApi[]): string {
   const lines: string[] = [];
@@ -45,6 +53,8 @@ export type PackFinancialConversationResult =
 export async function packFinancialConversationAction(input: {
   priorSummary: string | null;
   segment: ConversationTurnForApi[];
+  /** When vi, packed summary is written in Vietnamese for chat context. */
+  locale?: Locale;
 }): Promise<PackFinancialConversationResult> {
   const session = await auth();
   if (!session?.user?.id) {
@@ -69,7 +79,7 @@ export async function packFinancialConversationAction(input: {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
     model: modelName,
-    systemInstruction: PACK_SYSTEM,
+    systemInstruction: packSystemForLocale(input.locale),
     generationConfig: {
       temperature: 0.1,
       responseMimeType: "application/json",

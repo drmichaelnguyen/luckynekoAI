@@ -4,6 +4,7 @@ import { ArrowLeft, BookOpen } from "lucide-react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
 
+import { LanguageSwitcher } from "@/components/i18n/language-switcher";
 import { getGuideContent } from "@/lib/i18n/guide-content";
 import { useLocale } from "@/contexts/locale-context";
 import { Button } from "@/components/ui/button";
@@ -18,13 +19,14 @@ export function GuidePageClient() {
   return (
     <div className="min-h-dvh bg-gradient-to-b from-amber-50/80 to-background px-4 py-8 pb-16 dark:from-amber-950/20">
       <div className="mx-auto max-w-2xl">
-        <div className="mb-6 flex flex-wrap items-center gap-3">
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <Button variant="outline" size="sm" className="gap-2" asChild>
             <Link href={backHref}>
               <ArrowLeft className="h-4 w-4" />
               {backLabel}
             </Link>
           </Button>
+          <LanguageSwitcher />
         </div>
 
         <div className="mb-8 flex items-start gap-3 rounded-2xl border border-amber-200/60 bg-card/80 p-4 shadow-sm dark:border-amber-900/40">

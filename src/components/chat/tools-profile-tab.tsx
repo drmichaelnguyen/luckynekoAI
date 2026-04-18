@@ -12,13 +12,16 @@ import {
   uploadAvatarAction,
   type ProfileState,
 } from "@/actions/profile";
+import { LanguageSwitcher } from "@/components/i18n/language-switcher";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useLocale } from "@/contexts/locale-context";
 import { Loader2 } from "lucide-react";
 
 const initialState: ProfileState = { ok: true, error: null, message: null };
 
 export function ToolsProfileTab({ active }: { active: boolean }) {
+  const { t } = useLocale();
   const router = useRouter();
   const { update } = useSession();
   const [isPending, startTransition] = useTransition();
@@ -62,6 +65,14 @@ export function ToolsProfileTab({ active }: { active: boolean }) {
 
   return (
     <div className="space-y-6 text-sm">
+      <div className="rounded-lg border border-border/70 bg-muted/15 p-3">
+        <h3 className="text-xs font-medium text-foreground">{t("common_language")}</h3>
+        <p className="mt-1 text-[11px] text-muted-foreground">{t("profile_language_blurb")}</p>
+        <div className="mt-2 flex justify-start">
+          <LanguageSwitcher />
+        </div>
+      </div>
+
       <div>
         <h3 className="text-xs font-medium text-foreground">Profile</h3>
         <p className="mt-1 text-[11px] text-muted-foreground">

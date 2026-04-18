@@ -1,6 +1,7 @@
 "use server";
 
 import { GoogleGenerativeAI, type Part } from "@google/generative-ai";
+import { cookies } from "next/headers";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
@@ -25,6 +26,7 @@ import {
   getShareImport,
   type ShareImportPayload,
 } from "@/lib/share-import-cache";
+import { LOCALE_COOKIE, parseLocale, type Locale } from "@/lib/i18n/config";
 
 const GeminiResponseSchema = z
   .object({
@@ -158,6 +160,17 @@ Conversation memory:
 
 assistantMessage should be a concise, human summary of what you understood (1-3 sentences), not raw JSON.`;
 
+function chatSystemInstructionForLocale(locale: Locale): string {
+  if (locale !== "vi") return SYSTEM_INSTRUCTION;
+  return `${SYSTEM_INSTRUCTION}
+
+— Giao diện người dùng: Tiếng Việt —
+• assistantMessage, followUpQuestion và extractedTextSummary phải viết bằng tiếng Việt tự nhiên, thân thiện (vẫn là trợ lý tài chính chủ đề mèo may mắn / Canada).
+• Giữ nguyên tên thuộc tính JSON và các giá trị documentKind bằng tiếng Anh đúng như quy định ở trên.
+• Trường category và walletLabel trong các đối tượng có cấu trúc phải khớp CHÍNH XÁC chuỗi trong USER LEDGER CONTEXT (có thể là tiếng Anh từ cơ sở dữ liệu).
+• Văn bản đọc từ chứng từ (merchant, mô tả dòng) có thể theo ngôn ngữ trên hóa đơn hoặc phiếu lương.`;
+}
+
 const ConversationTurnSchema = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string(),
@@ -232,6 +245,12 @@ export async function handleChatInput(formData: FormData) {
     };
   }
 
+  const localeFromForm = String(formData.get("locale") ?? "").trim();
+  const cookieStore = await cookies();
+  const uiLocale: Locale = parseLocale(
+    localeFromForm.length > 0 ? localeFromForm : cookieStore.get(LOCALE_COOKIE)?.value,
+  );
+
   const message = String(formData.get("message") ?? "").trim();
   const shareContextRaw = String(formData.get("shareContext") ?? "").trim();
 
@@ -305,7 +324,7 @@ export async function handleChatInput(formData: FormData) {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
     model: modelName,
-    systemInstruction: SYSTEM_INSTRUCTION,
+    systemInstruction: chatSystemInstructionForLocale(uiLocale),
     generationConfig: {
       temperature: 0.15,
       responseMimeType: "application/json",
@@ -540,7 +559,11 @@ export async function handleChatInput(formData: FormData) {
         ? data.assistantMessage.trim()
         : "I processed your upload but didn’t get a readable summary back. Try again, or add a short note about what the file is.";
     if (pendingDocumentImport) {
-      assistantMessage = `${assistantMessage}\n\n---\nFrom your file (readout):\n${pendingDocumentImport.extractedTextSummary}\n\n---\nUse the buttons under the chat to save this to your ledger as read, or edit details first. Edits are stored with the image for optional future training export.`;
+      const pendingTail =
+        uiLocale === "vi"
+          ? `\n\n---\nNội dung đọc từ chứng từ:\n${pendingDocumentImport.extractedTextSummary}\n\n---\nDùng các nút dưới khung chat để lưu vào sổ đúng như đã đọc, hoặc chỉnh sửa trước. Phần chỉnh sửa được lưu kèm ảnh nếu bạn xuất dữ liệu huấn luyện sau này.`
+          : `\n\n---\nFrom your file (readout):\n${pendingDocumentImport.extractedTextSummary}\n\n---\nUse the buttons under the chat to save this to your ledger as read, or edit details first. Edits are stored with the image for optional future training export.`;
+      assistantMessage = `${assistantMessage}${pendingTail}`;
     }
     if (
       data.documentKind === "freeform_transaction" &&

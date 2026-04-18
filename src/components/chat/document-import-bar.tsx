@@ -4,6 +4,7 @@ import { Loader2 } from "lucide-react";
 import { useState } from "react";
 
 import { resolveDocumentImportAction } from "@/actions/document-import";
+import { useLocale } from "@/contexts/locale-context";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import type { PendingDocumentImport } from "@/types/chat";
@@ -15,6 +16,7 @@ type Props = {
 };
 
 export function DocumentImportBar({ pending, onResolved, onDismiss }: Props) {
+  const { locale } = useLocale();
   const [editOpen, setEditOpen] = useState(false);
   const [correctionText, setCorrectionText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -27,6 +29,7 @@ export function DocumentImportBar({ pending, onResolved, onDismiss }: Props) {
       const fd = new FormData();
       fd.set("chatTurnId", pending.chatTurnId);
       fd.set("mode", mode);
+      fd.set("locale", locale);
       if (mode === "edit") {
         fd.set("correctionText", correctionText.trim());
       }
@@ -52,8 +55,14 @@ export function DocumentImportBar({ pending, onResolved, onDismiss }: Props) {
       </p>
       {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
       {!editOpen ? (
-        <div className="mt-2 flex flex-wrap gap-2">
-          <Button type="button" size="sm" className="h-8 gap-1.5 text-xs" disabled={busy} onClick={() => void run("add")}>
+        <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+          <Button
+            type="button"
+            size="sm"
+            className="h-11 w-full gap-1.5 text-sm sm:h-9 sm:w-auto sm:text-xs"
+            disabled={busy}
+            onClick={() => void run("add")}
+          >
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
             Save as read
           </Button>
@@ -61,13 +70,20 @@ export function DocumentImportBar({ pending, onResolved, onDismiss }: Props) {
             type="button"
             size="sm"
             variant="outline"
-            className="h-8 text-xs"
+            className="h-11 w-full text-sm sm:h-9 sm:w-auto sm:text-xs"
             disabled={busy}
             onClick={() => setEditOpen(true)}
           >
             Edit first
           </Button>
-          <Button type="button" size="sm" variant="ghost" className="h-8 text-xs" disabled={busy} onClick={onDismiss}>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-11 w-full text-sm sm:h-9 sm:w-auto sm:text-xs"
+            disabled={busy}
+            onClick={onDismiss}
+          >
             Later
           </Button>
         </div>
@@ -85,14 +101,21 @@ export function DocumentImportBar({ pending, onResolved, onDismiss }: Props) {
             <Button
               type="button"
               size="sm"
-              className="h-8 gap-1.5 text-xs"
+              className="h-11 w-full gap-1.5 text-sm sm:h-9 sm:w-auto sm:text-xs"
               disabled={busy || !correctionText.trim()}
               onClick={() => void run("edit")}
             >
               {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
               Apply edit & save
             </Button>
-            <Button type="button" size="sm" variant="ghost" className="h-8 text-xs" disabled={busy} onClick={() => setEditOpen(false)}>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-11 w-full text-sm sm:h-9 sm:w-auto sm:text-xs"
+              disabled={busy}
+              onClick={() => setEditOpen(false)}
+            >
               Back
             </Button>
           </div>

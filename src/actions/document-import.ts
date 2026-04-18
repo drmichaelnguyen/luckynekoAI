@@ -1,11 +1,13 @@
 "use server";
 
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { cookies } from "next/headers";
 import { z } from "zod";
 
 import { auth } from "@/auth";
 import { persistPaystubLedgerEntry, persistReceiptLedgerEntry } from "@/lib/finance/persist-receipt-paystub";
 import type { PendingImportPayloadV1 } from "@/lib/document-import/pending-import-shared";
+import { LOCALE_COOKIE, parseLocale, type Locale } from "@/lib/i18n/config";
 import { prisma } from "@/lib/prisma";
 
 const PendingPayloadSchema = z.object({
@@ -21,11 +23,24 @@ const MergeSchema = z.object({
   paystub: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 
+const MERGE_SYSTEM_EN = `You apply a user's correction instructions to structured financial extraction JSON.
+Return JSON only (no markdown) with exactly one of these keys populated to match the document kind:
+{ "receipt": object } OR { "paystub": object }
+Use the same field names and types as the input object. Preserve fields the user did not dispute. Do not invent merchants or totals the user did not supply.`;
+
+const MERGE_SYSTEM_VI_APPEND = `
+Giao diện: tiếng Việt. Người dùng có thể viết chỉ dẫn chỉnh sửa bằng tiếng Việt — hiểu ý và áp dụng đúng vào JSON cấu trúc.`;
+
+function mergeSystemForLocale(locale: Locale): string {
+  return locale === "vi" ? `${MERGE_SYSTEM_EN}${MERGE_SYSTEM_VI_APPEND}` : MERGE_SYSTEM_EN;
+}
+
 async function mergeProposedWithUserCorrections(input: {
   documentKind: "receipt" | "canadian_paystub";
   proposed: Record<string, unknown>;
   extractedTextSummary: string;
   correctionText: string;
+  locale: Locale;
 }): Promise<Record<string, unknown>> {
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!apiKey) {
@@ -36,10 +51,7 @@ async function mergeProposedWithUserCorrections(input: {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
     model: modelName,
-    systemInstruction: `You apply a user's correction instructions to structured financial extraction JSON.
-Return JSON only (no markdown) with exactly one of these keys populated to match the document kind:
-{ "receipt": object } OR { "paystub": object }
-Use the same field names and types as the input object. Preserve fields the user did not dispute. Do not invent merchants or totals the user did not supply.`,
+    systemInstruction: mergeSystemForLocale(input.locale),
     generationConfig: { temperature: 0.1, responseMimeType: "application/json" },
   });
 
@@ -87,6 +99,12 @@ export async function resolveDocumentImportAction(formData: FormData): Promise<R
   if (!session?.user?.id) {
     return { ok: false, error: "Sign in to continue." };
   }
+
+  const localeFromForm = String(formData.get("locale") ?? "").trim();
+  const cookieStore = await cookies();
+  const uiLocale: Locale = parseLocale(
+    localeFromForm.length > 0 ? localeFromForm : cookieStore.get(LOCALE_COOKIE)?.value,
+  );
 
   const chatTurnId = String(formData.get("chatTurnId") ?? "").trim();
   const mode = String(formData.get("mode") ?? "").trim().toLowerCase();
@@ -142,6 +160,7 @@ export async function resolveDocumentImportAction(formData: FormData): Promise<R
       proposed: pending.proposed,
       extractedTextSummary: pending.extractedTextSummary,
       correctionText,
+      locale: uiLocale,
     });
     markedForTraining = true;
     try {

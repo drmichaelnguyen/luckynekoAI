@@ -52,7 +52,7 @@ export function AdvancedToolsButton({
       type="button"
       variant="outline"
       size="sm"
-      className="relative shrink-0 gap-1.5 px-2 sm:px-3"
+      className="relative h-11 min-h-[44px] shrink-0 gap-1.5 px-2.5 sm:h-9 sm:min-h-0 sm:px-3"
       onClick={onClick}
       aria-label="Advanced tools"
       title="Advanced tools"
@@ -160,27 +160,35 @@ export function AdvancedToolsPanel({
       />
       <div
         className={cn(
-          "relative flex h-full w-full max-w-md flex-col border-l bg-background shadow-xl sm:h-[min(100dvh-1.5rem,calc(100dvh-1.5rem))] sm:rounded-l-xl sm:rounded-r-lg",
+          "relative flex h-[100dvh] max-h-[100dvh] w-full max-w-md flex-col border-l bg-background shadow-xl",
+          "sm:h-[min(100dvh-1.5rem,calc(100dvh-1.5rem))] sm:max-h-[min(100dvh-1.5rem,calc(100dvh-1.5rem))] sm:rounded-l-xl sm:rounded-r-lg",
         )}
         role="dialog"
         aria-modal="true"
         aria-labelledby="advanced-tools-title"
       >
-        <div className="flex items-center justify-between border-b px-4 py-3">
-          <div>
-            <h2 id="advanced-tools-title" className="text-sm font-semibold">
+        <div className="flex items-center justify-between gap-2 border-b px-3 py-2.5 pt-[max(0.5rem,env(safe-area-inset-top))] sm:px-4 sm:py-3 sm:pt-3">
+          <div className="min-w-0">
+            <h2 id="advanced-tools-title" className="text-sm font-semibold sm:text-base">
               Advanced tools
             </h2>
-            <p className="text-xs text-muted-foreground">
+            <p className="hidden text-xs text-muted-foreground sm:block">
               Dashboard · import · confirm · wallets · plans · profile · backup
             </p>
           </div>
-          <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-11 w-11 shrink-0 sm:h-9 sm:w-9"
+            onClick={onClose}
+            aria-label="Close"
+          >
             <PanelRightClose className="h-5 w-5" />
           </Button>
         </div>
 
-        <div className="flex gap-1 overflow-x-auto border-b px-2 py-2 scrollbar-thin">
+        <div className="flex gap-0.5 overflow-x-auto border-b px-1.5 py-1.5 [-webkit-overflow-scrolling:touch] sm:gap-1 sm:px-2 sm:py-2">
           {(
             [
               ["dashboard", "Dashboard"],
@@ -197,7 +205,7 @@ export function AdvancedToolsPanel({
               type="button"
               size="sm"
               variant={tab === id ? "secondary" : "ghost"}
-              className="min-w-0 shrink-0 flex-1 text-[10px] sm:text-sm"
+              className="min-h-[44px] min-w-0 shrink-0 flex-1 px-1.5 text-[11px] leading-tight sm:min-h-0 sm:px-3 sm:text-sm"
               onClick={() => setTab(id)}
               title={id === "profile" ? "Account & profile" : undefined}
               aria-label={id === "profile" ? "Profile — account information" : undefined}
@@ -213,7 +221,7 @@ export function AdvancedToolsPanel({
           ))}
         </div>
 
-        <div className="flex-1 overflow-y-auto px-4 py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-4 sm:py-4">
           {tab === "dashboard" ? (
             <DashboardInsights
               range={dashboardRange}
@@ -386,7 +394,7 @@ export function AdvancedToolsPanel({
                 ))}
               </ul>
               <form
-                className="flex gap-2"
+                className="flex flex-col gap-2 sm:flex-row"
                 onSubmit={(e) => {
                   e.preventDefault();
                   const name = walletName.trim();
@@ -410,7 +418,7 @@ export function AdvancedToolsPanel({
                   placeholder="New wallet name"
                   className="text-sm"
                 />
-                <Button type="submit" size="sm" disabled={isPending || !walletName.trim()}>
+                <Button type="submit" size="sm" className="h-11 w-full sm:h-9 sm:w-auto" disabled={isPending || !walletName.trim()}>
                   Add
                 </Button>
               </form>

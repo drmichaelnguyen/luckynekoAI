@@ -351,6 +351,7 @@ export function ChatInterface() {
           const packResult = await packFinancialConversationAction({
             priorSummary: summary.length > 0 ? summary : null,
             segment,
+            locale,
           });
           if (!packResult.ok) {
             setMessages((prev) => prev.filter((m) => m.id !== userMessage.id));
@@ -370,6 +371,7 @@ export function ChatInterface() {
         }
 
         const formData = new FormData();
+        formData.set("locale", locale);
         formData.set("message", trimmed);
         if (summary.length > 0) {
           formData.set("conversationPackedSummary", summary);
@@ -447,7 +449,7 @@ export function ChatInterface() {
         setChatBusy(false);
       }
     },
-    [refreshPendingCount],
+    [refreshPendingCount, locale],
   );
 
   const sendSpokenText = useCallback(
@@ -512,9 +514,9 @@ export function ChatInterface() {
 
   return (
     <div className="flex min-h-dvh flex-col bg-background">
-      <header className="sticky top-0 z-20 border-b bg-background/80 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-4 py-3">
-          <div className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-amber-50 ring-1 ring-amber-200/80 dark:bg-amber-950/40 dark:ring-amber-800/60">
+      <header className="sticky top-0 z-20 border-b bg-background/80 backdrop-blur pt-[max(0.25rem,env(safe-area-inset-top))]">
+        <div className="mx-auto flex w-full max-w-3xl items-center gap-2 px-3 py-2 sm:gap-3 sm:px-4 sm:py-3">
+          <div className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-amber-50 ring-1 ring-amber-200/80 dark:bg-amber-950/40 dark:ring-amber-800/60 sm:h-11 sm:w-11">
             {status === "authenticated" && session?.user?.image ? (
               <img src={session.user.image} alt="" className="absolute inset-0 h-full w-full object-cover" />
             ) : (
@@ -522,31 +524,54 @@ export function ChatInterface() {
             )}
           </div>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-semibold leading-tight">
-              {status === "authenticated" && session?.user?.name
-                ? session.user.name
-                : status === "authenticated" && session?.user?.email
-                  ? session.user.email.split("@")[0]
-                  : "NekoZeni"}
-            </div>
-            <div className="truncate text-xs text-muted-foreground">
-              {status === "authenticated" && session?.user?.nickname
-                ? `Chat as “${session.user.nickname}” · receipts & paystubs`
-                : "Lucky-cat treasurer · Chat · PWA"}
-            </div>
+            {status === "authenticated" && session?.user ? (
+              <button
+                type="button"
+                className="w-full max-w-full rounded-lg px-1 py-1 text-left outline-none ring-offset-background transition hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring active:bg-muted/50 min-h-[44px] sm:min-h-0 sm:py-0.5"
+                onClick={() => {
+                  setToolsInitialTab("profile");
+                  setToolsOpen(true);
+                }}
+                aria-label={t("chat_account_aria")}
+              >
+                <div className="truncate text-sm font-semibold leading-tight">
+                  {session.user.name
+                    ? session.user.name
+                    : session.user.email
+                      ? session.user.email.split("@")[0]
+                      : "NekoZeni"}
+                </div>
+                <div className="truncate text-xs text-muted-foreground">
+                  {session.user.nickname
+                    ? `Chat as “${session.user.nickname}” · receipts & paystubs`
+                    : "Lucky-cat treasurer · Chat · PWA"}
+                </div>
+              </button>
+            ) : (
+              <>
+                <div className="truncate text-sm font-semibold leading-tight">NekoZeni</div>
+                <div className="truncate text-xs text-muted-foreground">Lucky-cat treasurer · Chat · PWA</div>
+              </>
+            )}
           </div>
           {status === "authenticated" && session?.user?.email ? (
-            <div className="flex shrink-0 items-center gap-2">
-              <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" asChild title={t("guide_link_label")}>
+            <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-11 w-11 shrink-0 sm:h-9 sm:w-9"
+                asChild
+                title={t("guide_link_label")}
+              >
                 <Link href="/guide" aria-label={t("guide_link_aria")}>
-                  <BookOpen className="h-4 w-4" />
+                  <BookOpen className="h-5 w-5 sm:h-4 sm:w-4" />
                 </Link>
               </Button>
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="h-9 w-9 shrink-0"
+                className="h-11 w-11 shrink-0 sm:h-9 sm:w-9"
                 title={t("chat_account_title")}
                 aria-label={t("chat_account_aria")}
                 onClick={() => {
@@ -554,7 +579,7 @@ export function ChatInterface() {
                   setToolsOpen(true);
                 }}
               >
-                <User className="h-4 w-4" />
+                <User className="h-5 w-5 sm:h-4 sm:w-4" />
               </Button>
               <AdvancedToolsButton
                 pendingCount={pendingConfirmCount}
@@ -563,17 +588,17 @@ export function ChatInterface() {
                   setToolsOpen(true);
                 }}
               />
-              <span className="hidden max-w-[11rem] truncate text-xs text-muted-foreground sm:inline">
+              <span className="hidden max-w-[11rem] truncate text-xs text-muted-foreground md:inline">
                 {session.user.email}
               </span>
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                className="gap-1.5 px-2 sm:px-3"
+                className="h-11 min-w-[44px] gap-1.5 px-2.5 sm:h-9 sm:min-w-0 sm:px-3"
                 onClick={() => void signOut({ callbackUrl: "/login" })}
               >
-                <LogOut className="h-4 w-4" />
+                <LogOut className="h-5 w-5 sm:h-4 sm:w-4" />
                 <span className="hidden sm:inline">Sign out</span>
               </Button>
             </div>
@@ -588,8 +613,8 @@ export function ChatInterface() {
         onBooksChanged={refreshPendingCount}
       />
 
-      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-[calc(5.75rem+env(safe-area-inset-bottom))] pt-4">
-        <ScrollArea className="min-h-[calc(100dvh-8.25rem)] pr-2">
+      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom))] pt-3 sm:px-4 sm:pb-[calc(5.75rem+env(safe-area-inset-bottom))] sm:pt-4">
+        <ScrollArea className="min-h-[calc(100dvh-7.25rem)] pr-1 sm:min-h-[calc(100dvh-8.25rem)] sm:pr-2">
           <div className="space-y-3 pb-4">
             <AnimatePresence initial={false}>
               {messages.map((m) => (
@@ -607,13 +632,13 @@ export function ChatInterface() {
                 >
                   <div
                     className={cn(
-                      "flex max-w-[min(92%,34rem)] gap-2",
+                      "flex max-w-[calc(100vw-2.25rem)] gap-2 sm:max-w-[min(92%,34rem)]",
                       m.role === "user" ? "flex-row-reverse" : "flex-row",
                     )}
                   >
                     <div
                       className={cn(
-                        "mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border",
+                        "mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border sm:h-9 sm:w-9",
                         m.role === "user"
                           ? "bg-primary text-primary-foreground"
                           : "bg-muted text-foreground",
@@ -622,14 +647,14 @@ export function ChatInterface() {
                       {m.role === "user" ? (
                         <User className="h-4 w-4" />
                       ) : (
-                        <LuckyNekoAvatar className="scale-90" />
+                        <LuckyNekoAvatar className="scale-95 sm:scale-90" />
                       )}
                     </div>
 
                     <div className="min-w-0 space-y-2">
                       <div
                         className={cn(
-                          "rounded-2xl border px-3 py-2 text-sm leading-relaxed shadow-sm",
+                          "rounded-2xl border px-3 py-2.5 text-[15px] leading-relaxed shadow-sm sm:py-2 sm:text-sm",
                           m.role === "user"
                             ? "rounded-br-md bg-primary text-primary-foreground"
                             : "rounded-bl-md bg-card text-card-foreground",
@@ -680,7 +705,7 @@ export function ChatInterface() {
               <motion.div
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="flex items-center gap-2 pl-12 text-xs text-muted-foreground"
+                className="flex items-center gap-2 pl-10 text-xs text-muted-foreground sm:pl-12"
               >
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Thinking…
@@ -692,8 +717,8 @@ export function ChatInterface() {
         </ScrollArea>
       </main>
 
-      <div className="fixed inset-x-0 bottom-0 z-30 border-t bg-background/90 backdrop-blur supports-[backdrop-filter]:bg-background/70">
-        <div className="mx-auto w-full max-w-3xl px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3">
+      <div className="fixed inset-x-0 bottom-0 z-30 border-t bg-background/95 pt-2 shadow-[0_-6px_30px_rgba(0,0,0,0.06)] backdrop-blur-md supports-[backdrop-filter]:bg-background/75 dark:shadow-[0_-6px_30px_rgba(0,0,0,0.35)] sm:pt-3">
+        <div className="mx-auto w-full max-w-3xl px-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-4 sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           <AnimatePresence>
             {spendCheckinVisible ? (
               <DailySpendCheckinBanner
@@ -722,7 +747,7 @@ export function ChatInterface() {
                   key={`${file.name}-${idx}`}
                   type="button"
                   onClick={() => removeFileAt(idx)}
-                  className="max-w-full truncate rounded-full border bg-secondary px-3 py-1 text-xs text-secondary-foreground hover:bg-secondary/80"
+                  className="max-w-full min-h-[44px] truncate rounded-full border bg-secondary px-3 py-2 text-xs text-secondary-foreground hover:bg-secondary/80 sm:min-h-0 sm:py-1"
                   title="Remove attachment"
                 >
                   {file.name}
@@ -731,7 +756,7 @@ export function ChatInterface() {
             </div>
           ) : null}
 
-          <div className="flex items-end gap-2">
+          <div className="flex flex-wrap items-end gap-2">
             <input
               ref={fileInputRef}
               type="file"
@@ -744,16 +769,31 @@ export function ChatInterface() {
               }}
             />
 
+            <Textarea
+              ref={textareaRef}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="Message NekoZeni…"
+              className="min-h-[52px] max-h-[min(40vh,16rem)] w-full shrink-0 basis-full resize-y sm:max-h-none sm:min-h-[44px] sm:w-auto sm:flex-1 sm:basis-auto"
+              rows={2}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  submit();
+                }
+              }}
+            />
+
             <Button
               type="button"
               variant="outline"
-              className="shrink-0 gap-2 px-3"
+              size="icon"
+              className="h-12 w-12 shrink-0 sm:h-10 sm:w-10"
               onClick={() => fileInputRef.current?.click()}
               aria-label="Upload images or PDFs"
               title="Upload"
             >
               <ImagePlus className="h-5 w-5" />
-              <span className="hidden text-sm sm:inline">Upload</span>
             </Button>
 
             {status === "authenticated" ? (
@@ -761,7 +801,8 @@ export function ChatInterface() {
                 <Button
                   type="button"
                   variant="outline"
-                  className="shrink-0 px-3"
+                  size="icon"
+                  className="h-12 w-12 shrink-0 sm:h-10 sm:w-10"
                   onClick={() => voice.startVoice()}
                   disabled={!voice.supported || chatBusy || files.length > 0}
                   aria-label={t("voice_start_aria")}
@@ -774,42 +815,26 @@ export function ChatInterface() {
                   }
                 >
                   <Mic className="h-5 w-5" />
-                  <span className="hidden text-sm sm:inline">{t("voice_start_title")}</span>
                 </Button>
               ) : (
                 <Button
                   type="button"
                   variant="secondary"
-                  className="shrink-0 gap-1.5 border-destructive/40 px-3 text-destructive hover:bg-destructive/10"
+                  size="icon"
+                  className="h-12 w-12 shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10 sm:h-10 sm:w-10"
                   onClick={() => voice.stopConversation()}
                   aria-label={t("voice_stop_aria")}
                   title={t("voice_stop_title")}
                 >
                   <Square className="h-4 w-4 fill-current" />
-                  <span className="hidden text-sm sm:inline">{t("voice_stop_title")}</span>
                 </Button>
               )
             ) : null}
 
-            <Textarea
-              ref={textareaRef}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder="Message NekoZeni…"
-              className="min-h-[44px] flex-1"
-              rows={2}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  submit();
-                }
-              }}
-            />
-
             <Button
               type="button"
               size="icon"
-              className="shrink-0"
+              className="ml-auto h-12 w-12 shrink-0 sm:ml-0 sm:h-10 sm:w-10"
               onClick={submit}
               disabled={
                 isPending ||
@@ -828,7 +853,7 @@ export function ChatInterface() {
             </Button>
           </div>
 
-          <div className="mt-2 space-y-1.5 text-[11px] text-muted-foreground">
+          <div className="mt-2 space-y-1.5 text-[11px] leading-snug text-muted-foreground">
             {voice.mode !== "off" ? (
               <div className="flex items-center gap-2 font-medium text-foreground">
                 {voice.mode === "listening" ? (

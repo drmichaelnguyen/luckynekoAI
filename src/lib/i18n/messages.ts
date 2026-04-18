@@ -6,6 +6,7 @@ export type MessageKey =
   | "lang_vi"
   | "common_language"
   | "common_loading"
+  | "profile_language_blurb"
   | "login_title"
   | "login_subtitle"
   | "login_email"
@@ -57,6 +58,7 @@ const en: Record<MessageKey, string> = {
   lang_vi: "Tiếng Việt",
   common_language: "Language",
   common_loading: "Loading…",
+  profile_language_blurb: "Applies across the app after you choose.",
   login_title: "Welcome back",
   login_subtitle: "Sign in to NekoZeni with the email you used to register.",
   login_email: "Email",
@@ -89,7 +91,7 @@ const en: Record<MessageKey, string> = {
   guide_link_label: "How to use · phone app · share photos",
   guide_link_aria: "Open the guide: using NekoZeni, install as an app, and share from the camera",
   chat_account_title: "Account & profile",
-  chat_account_aria: "Open account and profile: name, nickname, photo, password",
+  chat_account_aria: "Open account settings: language, profile, name, photo, password",
   daily_spend_checkin_body: "It's 10 PM or later — anything you'd like to log from today?",
   daily_spend_checkin_hint: "A quick note or receipt helps NekoZeni keep your ledger up to date.",
   daily_spend_checkin_log: "Log spending",
@@ -112,6 +114,7 @@ const vi: Record<MessageKey, string> = {
   lang_vi: "Tiếng Việt",
   common_language: "Ngôn ngữ",
   common_loading: "Đang tải…",
+  profile_language_blurb: "Áp dụng cho toàn bộ ứng dụng sau khi bạn chọn.",
   login_title: "Chào mừng trở lại",
   login_subtitle: "Đăng nhập NekoZeni bằng email bạn đã đăng ký.",
   login_email: "Email",
@@ -143,7 +146,7 @@ const vi: Record<MessageKey, string> = {
   guide_link_label: "Cách dùng · cài trên điện thoại · chia sẻ ảnh",
   guide_link_aria: "Mở hướng dẫn: dùng NekoZeni, cài như app, chia sẻ từ máy ảnh",
   chat_account_title: "Tài khoản & hồ sơ",
-  chat_account_aria: "Mở tài khoản và hồ sơ: tên, biệt danh, ảnh, mật khẩu",
+  chat_account_aria: "Mở cài đặt tài khoản: ngôn ngữ, hồ sơ, tên, ảnh, mật khẩu",
   daily_spend_checkin_body: "Đã qua 22h — bạn có muốn ghi lại chi tiêu hôm nay không?",
   daily_spend_checkin_hint: "Một dòng ghi chú hoặc ảnh hóa đơn giúp NekoZeni cập nhật sổ chi.",
   daily_spend_checkin_log: "Ghi chi tiêu",

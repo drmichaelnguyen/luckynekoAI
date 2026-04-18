@@ -25,7 +25,7 @@ const en: GuideContent = {
         "Open Tools (top right) for wallets, categories, CSV import, backups, and to confirm repeating bills that need a quick yes/no.",
       ],
       bullets: [
-        "Under Tools → Profile you can set your name, chat nickname, profile photo, and password. Tools → Plans is for spending budgets and savings goals the assistant can see in context.",
+        "Under Tools → Profile you can set language (English / Tiếng Việt), name, chat nickname, profile photo, and password — or tap your name in the chat header to open Profile. Tools → Plans is for spending budgets and savings goals the assistant can see in context.",
         "Images and PDFs you send are stored for your account (and included in a full ZIP backup under Tools → Backup).",
         "Large photos are automatically compressed to a clear JPEG when needed so uploads stay fast and storage-friendly.",
       ],
@@ -59,7 +59,7 @@ const en: GuideContent = {
       bullets: [
         "Receipts and Canadian paystub photos work best with good lighting and the full receipt in frame.",
         "Back up from Tools → Download ledger (JSON) for a small file, or Download full backup (ZIP) to include saved images for restore or your own archives.",
-        "Language: use English / Tiếng Việt from the switcher in the top corner (also before login).",
+        "Language: in chat, tap your name (or Tools → Profile) and use English / Tiếng Việt at the top of that panel. On sign-in, register, this guide, or onboarding, the switcher stays at the top of the page.",
       ],
     },
   ],
@@ -78,7 +78,7 @@ const vi: GuideContent = {
         "Mở Công cụ (góc trên bên phải) để quản lý ví, danh mục, nhập CSV, sao lưu, và xác nhận các khoản lặp lại cần bạn đồng ý nhanh.",
       ],
       bullets: [
-        "Tại Công cụ → Hồ sơ bạn đặt tên, biệt danh chat, ảnh đại diện và mật khẩu. Công cụ → Kế hoạch dùng cho ngân sách chi và mục tiêu tiết kiệm mà trợ lý thấy trong ngữ cảnh.",
+        "Tại Công cụ → Hồ sơ bạn chọn ngôn ngữ (English / Tiếng Việt), đặt tên, biệt danh chat, ảnh đại diện và mật khẩu — hoặc chạm tên bạn trên thanh chat để mở Hồ sơ. Công cụ → Kế hoạch dùng cho ngân sách chi và mục tiêu tiết kiệm mà trợ lý thấy trong ngữ cảnh.",
         "Ảnh và PDF bạn gửi được lưu theo tài khoản (và nằm trong bản sao lưu ZIP đầy đủ tại Công cụ → Sao lưu).",
         "Ảnh lớn được nén tự động sang JPEG rõ nét khi cần để tải nhanh và tiết kiệm dung lượng.",
       ],
@@ -112,7 +112,7 @@ const vi: GuideContent = {
       bullets: [
         "Hóa đơn / phiếu lương Canada: chụp đủ sáng, thấy cả tờ trong khung.",
         "Sao lưu: Công cụ → Tải sổ (JSON) cho file nhỏ, hoặc Tải bản đầy đủ (ZIP) gồm cả ảnh đã lưu.",
-        "Ngôn ngữ: chuyển English / Tiếng Việt ở góc trên (kể cả trước khi đăng nhập).",
+        "Ngôn ngữ: trong chat, chạm tên bạn (hoặc Công cụ → Hồ sơ) rồi chọn English / Tiếng Việt ở đầu bảng đó. Trang đăng nhập, đăng ký, hướng dẫn hoặc bắt đầu vẫn có nút góc trên.",
       ],
     },
   ],

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 
+import { LanguageSwitcher } from "@/components/i18n/language-switcher";
 import { LuckyNekoMascot } from "@/components/mascot/lucky-neko";
 import { useLocale } from "@/contexts/locale-context";
 import { Button } from "@/components/ui/button";
@@ -52,7 +53,10 @@ export function LoginForm() {
     safeFrom !== "/" ? `/register?from=${encodeURIComponent(safeFrom)}` : "/register";
 
   return (
-    <div className="flex min-h-dvh flex-col items-center justify-center bg-gradient-to-b from-amber-50/80 to-background px-4 py-10 dark:from-amber-950/20">
+    <div className="relative flex min-h-dvh flex-col items-center justify-center bg-gradient-to-b from-amber-50/80 to-background px-4 py-10 dark:from-amber-950/20">
+      <div className="pointer-events-auto absolute right-3 top-3 z-10 sm:right-4 sm:top-4">
+        <LanguageSwitcher />
+      </div>
       <div className="mb-6 flex flex-col items-center gap-2 text-center">
         <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-50 ring-1 ring-amber-200/80 dark:bg-amber-950/40 dark:ring-amber-800/60">
           <LuckyNekoMascot variant="hero" celebrateOnMount={false} />

@@ -33,11 +33,11 @@ export function DailySpendCheckinBanner({ onLogSpending, onDismiss }: Props) {
           <p className="text-[11px] leading-snug text-amber-900/85 dark:text-amber-100/80">
             {t("daily_spend_checkin_hint")}
           </p>
-          <div className="flex flex-wrap gap-2 pt-0.5">
-            <Button type="button" size="sm" className="h-8 text-xs" onClick={onLogSpending}>
+          <div className="flex flex-col gap-2 pt-0.5 sm:flex-row sm:flex-wrap">
+            <Button type="button" size="sm" className="h-11 w-full text-sm sm:h-9 sm:w-auto" onClick={onLogSpending}>
               {t("daily_spend_checkin_log")}
             </Button>
-            <Button type="button" size="sm" variant="ghost" className="h-8 text-xs" onClick={onDismiss}>
+            <Button type="button" size="sm" variant="ghost" className="h-11 w-full text-sm sm:h-9 sm:w-auto" onClick={onDismiss}>
               {t("daily_spend_checkin_dismiss")}
             </Button>
           </div>
