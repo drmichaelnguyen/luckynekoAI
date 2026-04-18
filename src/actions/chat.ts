@@ -44,6 +44,18 @@ const GeminiResponseSchema = z
     extractedTextSummary: z.union([z.string(), z.null()]).optional(),
     /** When true with a financial document upload, the app waits for explicit user ADD/EDIT before writing the ledger. */
     awaitingLedgerDecision: z.boolean().optional(),
+    /** Populated when the user expresses intent to buy something (not yet purchased). Auto-saved as a financial plan. */
+    planSuggestion: z
+      .object({
+        title: z.string(),
+        description: z.string().nullable().optional(),
+        amountCents: z.number().nullable().optional(),
+        currency: z.string().optional(),
+        period: z.enum(["none", "weekly", "monthly", "yearly"]).optional(),
+        targetDate: z.string().nullable().optional(),
+      })
+      .nullable()
+      .optional(),
   })
   .passthrough();
 
@@ -91,7 +103,8 @@ Your JSON MUST match this shape (optional keys only when relevant):
   "assistantMessage": string,
   "followUpQuestion": string | null,
   "extractedTextSummary": string | null,
-  "awaitingLedgerDecision": boolean
+  "awaitingLedgerDecision": boolean,
+  "planSuggestion": null | { "title": string, "description": string | null, "amountCents": number | null, "currency": string, "period": "none" | "monthly" | "yearly" }
 }
 
 Rules:
@@ -179,6 +192,13 @@ Follow-ups:
 
 Conversation memory:
 - The user message may include a CONVERSATION SUMMARY (financial facts only) plus RECENT CHAT TURNS from earlier today. Use them for continuity (amounts discussed, categories chosen, corrections). If USER LEDGER CONTEXT disagrees with chat memory, trust the ledger as the saved source of truth.
+
+Purchase intent — CRITICAL:
+- When the user expresses intent, desire, or a plan to buy something that has NOT been purchased yet (e.g. "I want to buy", "I want to get", "I'm planning to buy/get", "thinking of buying", "should I buy", "can I afford", "I'm going to get"), treat this as a PURCHASE INTENT — NOT a completed transaction.
+- For purchase intents: set documentKind "freeform_transaction", set transaction to null (nothing bought), and populate planSuggestion with: title (short item name like "Buy iPhone 15"), description (optional context from user), amountCents (item price in cents if mentioned, else null), currency (use the default wallet currency from WALLETS context), period "none".
+- In assistantMessage for purchase intents, always do all four of these: (1) Confirm you've noted it as a planned purchase in their plans. (2) State their wallet balances from the WALLET BALANCES provided in the context. (3) Ask: "Before I can assess the risk, are there other expenses you're expecting before month end that haven't been logged yet — like rent, utilities, food, or anything else?" (4) If you know both the wallet balance and the item cost, give a brief risk note — comfortable (balance > 3× cost), manageable (1–3× cost), tight (< 1× cost).
+- Do NOT set planSuggestion if the user already bought the item (past tense: "I bought", "I spent", "I paid") — use the normal transaction flow instead.
+- Do NOT set both transaction and planSuggestion at the same time.
 
 assistantMessage should be a concise, human summary of what you understood (1-3 sentences), not raw JSON.`;
 
@@ -621,12 +641,44 @@ export async function handleChatInput(formData: FormData) {
       }
     }
 
+    let planCreated = false;
+    if (
+      data.planSuggestion &&
+      typeof data.planSuggestion === "object" &&
+      data.planSuggestion.title?.trim()
+    ) {
+      const ps = data.planSuggestion;
+      try {
+        const planDelegate = (prisma as unknown as { financialPlan?: { create: (args: unknown) => Promise<unknown> } })
+          .financialPlan;
+        if (planDelegate?.create) {
+          await planDelegate.create({
+            data: {
+              userId,
+              kind: "spending_budget",
+              title: ps.title.trim().slice(0, 200),
+              description: ps.description?.trim().slice(0, 2000) ?? null,
+              amountCents: typeof ps.amountCents === "number" ? Math.round(ps.amountCents) : null,
+              currency: ((ps.currency ?? "CAD").toUpperCase().slice(0, 3)),
+              period: ps.period ?? "none",
+              targetDate: ps.targetDate ? new Date(ps.targetDate) : null,
+              sortOrder: 0,
+            },
+          });
+          planCreated = true;
+        }
+      } catch {
+        /* best-effort — chat reply still returns */
+      }
+    }
+
     return {
       ok: true as const,
       assistantMessage,
       structured,
       followUpQuestion,
       ...(pendingDocumentImport ? { pendingDocumentImport } : {}),
+      ...(planCreated ? { planCreated: true as const } : {}),
     };
   } catch (error) {
     await rollbackChatUploads();

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 
+import { LanguageSwitcher } from "@/components/i18n/language-switcher";
 import { LuckyNekoMascot } from "@/components/mascot/lucky-neko";
 import { useLocale } from "@/contexts/locale-context";
 import { Button } from "@/components/ui/button";
@@ -59,6 +60,10 @@ export function LoginForm() {
         </div>
         <h1 className="text-xl font-semibold tracking-tight">{t("login_title")}</h1>
         <p className="max-w-sm text-sm text-muted-foreground">{t("login_subtitle")}</p>
+      </div>
+
+      <div className="mb-4 flex justify-center">
+        <LanguageSwitcher />
       </div>
 
       <form

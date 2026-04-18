@@ -2,7 +2,6 @@ import type { Metadata, Viewport } from "next";
 import { cookies } from "next/headers";
 import { Inter } from "next/font/google";
 
-import { GlobalLanguageSwitcher } from "@/components/i18n/global-language-switcher";
 import { LocaleProvider } from "@/contexts/locale-context";
 import { APP_VERSION } from "@/lib/app-version";
 import { LOCALE_COOKIE, parseLocale } from "@/lib/i18n/config";
@@ -62,7 +61,6 @@ export default async function RootLayout({
           >
             v{APP_VERSION}
           </p>
-          <GlobalLanguageSwitcher />
           <AuthSessionProvider>{children}</AuthSessionProvider>
         </LocaleProvider>
       </body>

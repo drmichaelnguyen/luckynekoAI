@@ -133,7 +133,7 @@ export async function ensureFinanceSeed(db: PrismaClient, userId: string): Promi
 export async function financeContextLines(db: PrismaClient, userId: string): Promise<string> {
   try {
     await ensureFinanceSeed(db, userId);
-    const [user, wallets, categories, plans] = await Promise.all([
+    const [user, wallets, categories, plans, balanceGroups] = await Promise.all([
       findUserNameAndNicknameById(db, userId),
       db.wallet.findMany({
         where: { userId },
@@ -146,7 +146,19 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
         select: { name: true, kind: true, slug: true },
       }),
       loadFinancialPlansForContext(db, userId),
+      db.transaction.groupBy({
+        by: ["walletId", "direction"],
+        where: { userId, status: { not: "rejected" } },
+        _sum: { amountCents: true },
+      }).catch(() => [] as { walletId: string; direction: string; _sum: { amountCents: number | null } }[]),
     ]);
+
+    const walletNetMap = new Map<string, number>();
+    for (const row of balanceGroups) {
+      const prev = walletNetMap.get(row.walletId) ?? 0;
+      const cents = row._sum.amountCents ?? 0;
+      walletNetMap.set(row.walletId, prev + (row.direction === "in" ? cents : -cents));
+    }
 
     const address = user?.nickname?.trim() || user?.name?.trim() || "Friend";
     const prefLines = [
@@ -169,10 +181,12 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
             }),
           ];
 
-    const wLines = wallets.map(
-      (w) =>
-        `- ${w.name} (${w.kind}, ${w.currency}${w.isDefault ? ", default" : ""}) [id:${w.id.slice(0, 8)}…]`,
-    );
+    const wLines = wallets.map((w) => {
+      const netCents = walletNetMap.get(w.id);
+      const balStr =
+        netCents != null ? ` balance:${(netCents / 100).toFixed(2)} ${w.currency}` : "";
+      return `- ${w.name} (${w.kind}, ${w.currency}${w.isDefault ? ", default" : ""}${balStr}) [id:${w.id.slice(0, 8)}…]`;
+    });
     const cLines = categories.map((c) => `- ${c.name} (${c.kind}, slug:${c.slug})`);
     return [
       ...prefLines,

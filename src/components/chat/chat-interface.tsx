@@ -536,8 +536,8 @@ export function ChatInterface() {
             </div>
           </div>
           {status === "authenticated" && session?.user?.email ? (
-            <div className="flex shrink-0 items-center gap-2">
-              <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" asChild title={t("guide_link_label")}>
+            <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+              <Button variant="ghost" size="icon" className="hidden h-9 w-9 shrink-0 sm:inline-flex" asChild title={t("guide_link_label")}>
                 <Link href="/guide" aria-label={t("guide_link_aria")}>
                   <BookOpen className="h-4 w-4" />
                 </Link>
@@ -570,7 +570,7 @@ export function ChatInterface() {
                 type="button"
                 variant="outline"
                 size="sm"
-                className="gap-1.5 px-2 sm:px-3"
+                className="hidden gap-1.5 px-2 sm:inline-flex sm:px-3"
                 onClick={() => void signOut({ callbackUrl: "/login" })}
               >
                 <LogOut className="h-4 w-4" />

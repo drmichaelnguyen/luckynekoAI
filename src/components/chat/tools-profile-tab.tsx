@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useSession } from "next-auth/react";
+import { signOut, useSession } from "next-auth/react";
 import { useActionState, useCallback, useEffect, useState, useTransition } from "react";
 
 import {
@@ -12,9 +12,10 @@ import {
   uploadAvatarAction,
   type ProfileState,
 } from "@/actions/profile";
+import { LanguageSwitcher } from "@/components/i18n/language-switcher";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Loader2 } from "lucide-react";
+import { Loader2, LogOut } from "lucide-react";
 
 const initialState: ProfileState = { ok: true, error: null, message: null };
 
@@ -62,6 +63,14 @@ export function ToolsProfileTab({ active }: { active: boolean }) {
 
   return (
     <div className="space-y-6 text-sm">
+      <div className="border-b pb-4">
+        <h3 className="text-xs font-medium text-foreground">Language</h3>
+        <p className="mt-1 text-[11px] text-muted-foreground">App interface language.</p>
+        <div className="mt-3">
+          <LanguageSwitcher />
+        </div>
+      </div>
+
       <div>
         <h3 className="text-xs font-medium text-foreground">Profile</h3>
         <p className="mt-1 text-[11px] text-muted-foreground">
@@ -192,6 +201,19 @@ export function ToolsProfileTab({ active }: { active: boolean }) {
             Update password
           </Button>
         </form>
+      </div>
+
+      <div className="border-t pt-4">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="w-full gap-2 text-destructive hover:bg-destructive/10 hover:text-destructive"
+          onClick={() => void signOut({ callbackUrl: "/login" })}
+        >
+          <LogOut className="h-4 w-4" />
+          Sign out
+        </Button>
       </div>
     </div>
   );
