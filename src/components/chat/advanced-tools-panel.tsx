@@ -4,7 +4,7 @@ import { Download, Loader2, PanelRightClose, Upload, Wrench } from "lucide-react
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 
-import { importCsvWithLlmAction, MAX_CSV_PREVIEW_ROWS } from "@/actions/csv-import";
+import { importCsvWithLlmAction } from "@/actions/csv-import";
 import type { DashboardRange, LedgerDashboardResult } from "@/actions/dashboard";
 import { getLedgerDashboardAction } from "@/actions/dashboard";
 import {
@@ -21,6 +21,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
 type Tab = "dashboard" | "import" | "confirm" | "wallets" | "backup";
+
+const MAX_CSV_PREVIEW_ROWS = 80;
 
 function formatMoney(cents: number, currency: string) {
   const v = (cents / 100).toFixed(2);

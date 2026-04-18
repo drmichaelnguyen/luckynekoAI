@@ -117,7 +117,7 @@ model Transaction {
   source            String  @default("chat")
   importBatchId     String?
   importBatch       ImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
-  rawStructuredJson String? @db.Text
+  rawStructuredJson String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

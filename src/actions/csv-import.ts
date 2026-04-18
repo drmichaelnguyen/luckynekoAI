@@ -29,7 +29,7 @@ const CsvMapResponseSchema = z.object({
   summary: z.string().optional(),
 });
 
-export const MAX_CSV_PREVIEW_ROWS = 80;
+const MAX_CSV_PREVIEW_ROWS = 80;
 
 export type CsvImportResult =
   | { ok: true; imported: number; pending: number; summary: string }
