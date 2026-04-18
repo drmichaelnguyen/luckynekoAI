@@ -85,6 +85,12 @@ model StoredMedia {
   trainingOptIn      Boolean  @default(false)
   /// Small JSON snapshot of extracted labels for training pipelines (not full model output).
   structuredExcerpt  String?
+  /// When set, user has not yet chosen ADD vs EDIT for this chat turn’s financial document import.
+  pendingImportJson String?
+  /// Original vs user-corrected extraction bundle for optional training export (set on EDIT path).
+  trainingExampleJson String?
+  /// True when user corrected extraction before saving (pairs with trainingExampleJson).
+  markedForTraining   Boolean @default(false)
 
   @@index([userId, createdAt])
   @@index([chatTurnId])

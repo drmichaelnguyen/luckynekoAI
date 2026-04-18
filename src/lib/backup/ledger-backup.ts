@@ -91,6 +91,9 @@ const StoredMediaBackupRow = z.object({
   transactionId: z.string().nullable(),
   trainingOptIn: z.boolean(),
   structuredExcerpt: z.string().max(8000).nullable(),
+  pendingImportJson: z.string().max(500_000).nullable().optional(),
+  trainingExampleJson: z.string().max(500_000).nullable().optional(),
+  markedForTraining: z.boolean().optional(),
   zipEntryPath: z.string().min(1).max(500),
 });
 
@@ -275,6 +278,9 @@ export async function buildLedgerBackupZip(
       transactionId: m.transactionId,
       trainingOptIn: m.trainingOptIn,
       structuredExcerpt: m.structuredExcerpt,
+      pendingImportJson: m.pendingImportJson,
+      trainingExampleJson: m.trainingExampleJson,
+      markedForTraining: m.markedForTraining,
       zipEntryPath,
     };
   });
@@ -295,6 +301,7 @@ export async function buildLedgerBackupZip(
       documentKind: m.documentKind,
       trainingOptIn: m.trainingOptIn,
       transactionId: m.transactionId,
+      markedForTraining: m.markedForTraining,
     })),
   };
 
@@ -557,6 +564,9 @@ export async function restoreLedgerBackupForUser(
           transactionId: row.transactionId,
           trainingOptIn: row.trainingOptIn,
           structuredExcerpt: row.structuredExcerpt,
+          pendingImportJson: row.pendingImportJson ?? null,
+          trainingExampleJson: row.trainingExampleJson ?? null,
+          markedForTraining: row.markedForTraining ?? false,
           createdAt: new Date(row.createdAt),
         },
       });

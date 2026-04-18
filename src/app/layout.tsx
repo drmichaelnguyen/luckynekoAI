@@ -4,6 +4,7 @@ import { Inter } from "next/font/google";
 
 import { GlobalLanguageSwitcher } from "@/components/i18n/global-language-switcher";
 import { LocaleProvider } from "@/contexts/locale-context";
+import { APP_VERSION } from "@/lib/app-version";
 import { LOCALE_COOKIE, parseLocale } from "@/lib/i18n/config";
 
 import "./globals.css";
@@ -54,6 +55,13 @@ export default async function RootLayout({
     <html lang={locale} suppressHydrationWarning>
       <body className={`${inter.variable} min-h-dvh font-sans`}>
         <LocaleProvider initialLocale={locale}>
+          <p
+            className="pointer-events-none fixed left-3 top-3 z-50 select-none font-mono text-[10px] leading-none text-muted-foreground/70 sm:left-4 sm:top-4"
+            title={`NekoZeni v${APP_VERSION}`}
+            aria-hidden
+          >
+            v{APP_VERSION}
+          </p>
           <GlobalLanguageSwitcher />
           <AuthSessionProvider>{children}</AuthSessionProvider>
         </LocaleProvider>

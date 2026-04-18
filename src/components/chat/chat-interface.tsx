@@ -27,12 +27,13 @@ import {
 import { getPendingConfirmCountAction } from "@/actions/finance";
 import { AdvancedToolsButton, AdvancedToolsPanel } from "@/components/chat/advanced-tools-panel";
 import { DailySpendCheckinBanner } from "@/components/chat/daily-spend-checkin-banner";
+import { DocumentImportBar } from "@/components/chat/document-import-bar";
 import { LuckyNekoAvatar, LuckyNekoMascot } from "@/components/mascot/lucky-neko";
 import { useLocale } from "@/contexts/locale-context";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
-import type { ChatAttachmentMeta, ChatMessage } from "@/types/chat";
+import type { ChatAttachmentMeta, ChatMessage, PendingDocumentImport } from "@/types/chat";
 import {
   computePackTailStart,
   historyWithoutWelcome,
@@ -107,6 +108,7 @@ export function ChatInterface() {
   const [chatBusy, setChatBusy] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [pendingConfirmCount, setPendingConfirmCount] = useState(0);
+  const [pendingDocumentImport, setPendingDocumentImport] = useState<PendingDocumentImport | null>(null);
   const [packedFinancialSummary, setPackedFinancialSummary] = useState("");
   const [packedThroughIndex, setPackedThroughIndex] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -411,6 +413,11 @@ export function ChatInterface() {
             structuredJson,
           },
         ]);
+        if (result.pendingDocumentImport) {
+          setPendingDocumentImport(result.pendingDocumentImport);
+        } else {
+          setPendingDocumentImport(null);
+        }
         refreshPendingCount();
         return { ok: true, speakText: spoken };
       } finally {
@@ -652,6 +659,18 @@ export function ChatInterface() {
               />
             ) : null}
           </AnimatePresence>
+          {pendingDocumentImport ? (
+            <div className="mb-3">
+              <DocumentImportBar
+                pending={pendingDocumentImport}
+                onResolved={(msg) => {
+                  setMessages((prev) => [...prev, { id: randomId(), role: "assistant", content: msg }]);
+                  refreshPendingCount();
+                }}
+                onDismiss={() => setPendingDocumentImport(null)}
+              />
+            </div>
+          ) : null}
           {files.length > 0 ? (
             <div className="mb-2 flex flex-wrap gap-2">
               {files.map((file, idx) => (

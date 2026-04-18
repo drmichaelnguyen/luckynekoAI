@@ -4,6 +4,7 @@ import { GoogleGenerativeAI, type Part } from "@google/generative-ai";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
+import { PENDING_IMPORT_VERSION } from "@/actions/document-import";
 import { auth } from "@/auth";
 import { persistFreeformLedgerEntry } from "@/lib/finance/persist-from-chat";
 import { ensureFinanceSeed, financeContextLines } from "@/lib/finance/seed";
@@ -18,6 +19,7 @@ import {
 } from "@/lib/media/user-media-storage";
 import type { ConversationTurnForApi } from "@/lib/chat/conversation-context";
 import { prisma } from "@/lib/prisma";
+import type { PendingDocumentImport } from "@/types/chat";
 import {
   acknowledgeShareImport,
   getShareImport,
@@ -37,6 +39,10 @@ const GeminiResponseSchema = z
     paystub: z.record(z.string(), z.unknown()).nullable().optional(),
     assistantMessage: z.string(),
     followUpQuestion: z.union([z.string(), z.null()]).optional(),
+    /** Plain-language readout of what appears on the uploaded bill/receipt/paystub (required for financial uploads). */
+    extractedTextSummary: z.union([z.string(), z.null()]).optional(),
+    /** When true with a financial document upload, the app waits for explicit user ADD/EDIT before writing the ledger. */
+    awaitingLedgerDecision: z.boolean().optional(),
   })
   .passthrough();
 
@@ -69,14 +75,16 @@ export async function acknowledgeShareImportAction(id: string): Promise<void> {
 const SYSTEM_INSTRUCTION = `You are NekoZeni, a friendly lucky-cat-themed Canadian finance assistant.
 You MUST respond with JSON only (no markdown fences).
 
-Your JSON MUST match this shape:
+Your JSON MUST match this shape (optional keys only when relevant):
 {
   "documentKind": "freeform_transaction" | "receipt" | "canadian_paystub" | "unknown_document",
   "transaction": null | object,
   "receipt": null | object,
   "paystub": null | object,
   "assistantMessage": string,
-  "followUpQuestion": string | null
+  "followUpQuestion": string | null,
+  "extractedTextSummary": string | null,
+  "awaitingLedgerDecision": boolean
 }
 
 Rules:
@@ -86,6 +94,13 @@ Rules:
 - If the uploaded file is a clear retail or service purchase receipt or bill (you can read totals and context), use documentKind "receipt" and populate receipt with structured expense data suitable for database insertion.
 - If the uploaded file is a Canadian paystub, use documentKind "canadian_paystub" and populate paystub with payroll fields suitable for database insertion.
 - If you cannot confidently classify the file, use documentKind "unknown_document", set all extraction objects to null, explain briefly in assistantMessage, and ask what it is in followUpQuestion.
+
+Uploaded files (images/PDF) — pipeline before anything hits the ledger:
+1) Classify first: is this a financial document about money (retail/service receipt, bill, paid invoice, Canadian paystub, bank or card slip with amounts)? If clearly NO, use documentKind "unknown_document", all extraction objects null, stop — do not pretend it is a receipt.
+2) If YES: use documentKind "receipt" or "canadian_paystub" and populate only that object; use null for unreadable fields instead of guessing.
+3) extractedTextSummary: when documentKind is receipt or canadian_paystub AND the user attached a file, you MUST set this to a plain-text, human-readable readout of the document (merchant lines, dates, line items, taxes, totals, payment method) — like reading the page aloud, not JSON.
+4) awaitingLedgerDecision: set true when there is a file attachment and documentKind is receipt or canadian_paystub. The user must explicitly confirm in the app before a ledger row is created from that upload; do not state that the receipt is already saved in their ledger from the file alone.
+5) Typed-only purchases (no file) use freeform_transaction; omit awaitingLedgerDecision or set false.
 
 Transaction object fields (use null for unknown):
 - amount: number | null (major currency units, positive for magnitude; use direction for sign semantics)
@@ -419,6 +434,12 @@ export async function handleChatInput(formData: FormData) {
       transaction: data.transaction ?? null,
       receipt: data.receipt ?? null,
       paystub: data.paystub ?? null,
+      extractedTextSummary: data.extractedTextSummary ?? null,
+      awaitingLedgerDecision: Boolean(
+        data.awaitingLedgerDecision ??
+          (hadFileUpload &&
+            (data.documentKind === "receipt" || data.documentKind === "canadian_paystub")),
+      ),
     };
 
     let structuredExcerpt: string | null = null;
@@ -433,17 +454,65 @@ export async function handleChatInput(formData: FormData) {
       structuredExcerpt = null;
     }
 
+    let pendingDocumentImport: PendingDocumentImport | undefined;
+    let pendingImportJson: string | null = null;
+
+    const isFinancialUpload =
+      hadFileUpload &&
+      chatTurnId &&
+      (data.documentKind === "receipt" || data.documentKind === "canadian_paystub");
+
+    if (isFinancialUpload) {
+      const proposed =
+        data.documentKind === "receipt" &&
+        data.receipt &&
+        typeof data.receipt === "object" &&
+        !Array.isArray(data.receipt)
+          ? (data.receipt as Record<string, unknown>)
+          : data.documentKind === "canadian_paystub" &&
+              data.paystub &&
+              typeof data.paystub === "object" &&
+              !Array.isArray(data.paystub)
+            ? (data.paystub as Record<string, unknown>)
+            : null;
+      if (proposed) {
+        const summaryFromModel =
+          typeof data.extractedTextSummary === "string" ? data.extractedTextSummary.trim() : "";
+        const extracted =
+          summaryFromModel.length > 0
+            ? summaryFromModel
+            : data.assistantMessage.trim().slice(0, 2000);
+        const payload = {
+          version: PENDING_IMPORT_VERSION,
+          chatTurnId,
+          documentKind: data.documentKind,
+          extractedTextSummary: extracted,
+          proposed,
+        };
+        pendingImportJson = JSON.stringify(payload).slice(0, 500_000);
+        pendingDocumentImport = {
+          chatTurnId,
+          documentKind: data.documentKind,
+          extractedTextSummary: extracted,
+        };
+      }
+    }
+
     if (savedIds.length > 0) {
       await prisma.storedMedia.updateMany({
         where: { id: { in: savedIds } },
         data: {
           documentKind: data.documentKind,
           structuredExcerpt,
+          ...(pendingImportJson ? { pendingImportJson } : {}),
         },
       });
     }
 
     let assistantMessage = data.assistantMessage;
+    if (pendingDocumentImport) {
+      assistantMessage = `${assistantMessage}\n\n---\nFrom your file (readout):\n${pendingDocumentImport.extractedTextSummary}\n\n---\nUse the buttons under the chat to save this to your ledger as read, or edit details first. Edits are stored with the image for optional future training export.`;
+    }
     if (
       data.documentKind === "freeform_transaction" &&
       data.transaction &&
@@ -480,6 +549,7 @@ export async function handleChatInput(formData: FormData) {
       assistantMessage,
       structured,
       followUpQuestion,
+      ...(pendingDocumentImport ? { pendingDocumentImport } : {}),
     };
   } catch (error) {
     await rollbackChatUploads();
