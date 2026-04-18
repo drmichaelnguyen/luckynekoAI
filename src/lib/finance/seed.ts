@@ -1,6 +1,35 @@
-import type { PrismaClient, WalletKind } from "@prisma/client";
+import type { PlanKind, PlanPeriod, PrismaClient, WalletKind } from "@prisma/client";
 
 import { slugify } from "@/lib/finance/slug";
+
+/** Shape used when building chat finance context (keeps us typed if Prisma client is stale). */
+type FinancialPlanContextRow = {
+  kind: PlanKind;
+  title: string;
+  description: string | null;
+  amountCents: number | null;
+  currency: string;
+  period: PlanPeriod;
+  targetDate: Date | null;
+};
+
+async function loadFinancialPlansForContext(
+  db: PrismaClient,
+  userId: string,
+): Promise<FinancialPlanContextRow[]> {
+  const delegate = (db as unknown as { financialPlan?: { findMany: (args: unknown) => Promise<FinancialPlanContextRow[]> } })
+    .financialPlan;
+  if (!delegate?.findMany) {
+    console.error(
+      "[nekozen] Prisma client has no `financialPlan` model (outdated @prisma/client). Run `npx prisma generate`, restart the dev server, and ensure the DB schema is applied (`npx prisma db push` or migrate).",
+    );
+    return [];
+  }
+  return delegate.findMany({
+    where: { userId },
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+  });
+}
 
 const DEFAULT_WALLET_NAMES = ["Main", "Savings", "Credit card"] as const;
 
@@ -109,10 +138,7 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
       orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
       select: { name: true, kind: true, slug: true },
     }),
-    db.financialPlan.findMany({
-      where: { userId },
-      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-    }),
+    loadFinancialPlansForContext(db, userId),
   ]);
 
   const address = user?.nickname?.trim() || user?.name?.trim() || "Friend";

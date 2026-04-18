@@ -1,6 +1,6 @@
 "use client";
 
-import { Download, Loader2, PanelRightClose, Upload, Wrench } from "lucide-react";
+import { Download, Loader2, PanelRightClose, Upload, User, Wrench } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 
@@ -182,7 +182,10 @@ export function AdvancedToolsPanel({
               variant={tab === id ? "secondary" : "ghost"}
               className="min-w-0 shrink-0 flex-1 text-[10px] sm:text-sm"
               onClick={() => setTab(id)}
+              title={id === "profile" ? "Account & profile" : undefined}
+              aria-label={id === "profile" ? "Profile — account information" : undefined}
             >
+              {id === "profile" ? <User aria-hidden /> : null}
               {label}
               {id === "confirm" && pending.length > 0 ? (
                 <span className="ml-1 rounded-full bg-destructive/15 px-1.5 text-[10px] font-medium text-destructive">

@@ -420,6 +420,24 @@ export function ChatInterface() {
         }
         refreshPendingCount();
         return { ok: true, speakText: spoken };
+      } catch (e) {
+        const base =
+          e instanceof Error
+            ? e.message
+            : "Something went wrong sending your message. If you attached a large photo, try a smaller image or JPEG export.";
+        const hint =
+          base.includes("Body") || base.includes("413") || base.toLowerCase().includes("mb")
+            ? `${base}\n\nTip: camera photos are often several MB — this app needs the full image under the configured upload limit. Try exporting a smaller JPEG.`
+            : base;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: randomId(),
+            role: "assistant",
+            content: hint,
+          },
+        ]);
+        return { ok: false, error: hint, restoreComposer: true };
       } finally {
         setChatBusy(false);
       }

@@ -509,7 +509,10 @@ export async function handleChatInput(formData: FormData) {
       });
     }
 
-    let assistantMessage = data.assistantMessage;
+    let assistantMessage =
+      typeof data.assistantMessage === "string" && data.assistantMessage.trim().length > 0
+        ? data.assistantMessage.trim()
+        : "I processed your upload but didn’t get a readable summary back. Try again, or add a short note about what the file is.";
     if (pendingDocumentImport) {
       assistantMessage = `${assistantMessage}\n\n---\nFrom your file (readout):\n${pendingDocumentImport.extractedTextSummary}\n\n---\nUse the buttons under the chat to save this to your ledger as read, or edit details first. Edits are stored with the image for optional future training export.`;
     }

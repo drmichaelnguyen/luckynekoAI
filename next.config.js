@@ -17,6 +17,15 @@ const nextConfig = {
    * workspace root for output file tracing and warn on `next start`. Pin root to this app.
    */
   outputFileTracingRoot: path.join(__dirname),
+  /**
+   * Default Server Action body limit is 1MB; chat uploads allow much larger images/PDFs
+   * (see `assertUploadSize`). Without this, multipart sends often fail before `handleChatInput` runs.
+   */
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "30mb",
+    },
+  },
 };
 
 module.exports = withPWA(nextConfig);
