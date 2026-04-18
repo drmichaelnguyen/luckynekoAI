@@ -8,6 +8,7 @@ import { useFormStatus } from "react-dom";
 import { completeOnboardingAction, type OnboardingState } from "@/actions/onboarding";
 import { LanguageSwitcher } from "@/components/i18n/language-switcher";
 import { LuckyNekoMascot } from "@/components/mascot/lucky-neko";
+import { useLocale } from "@/contexts/locale-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -33,6 +34,7 @@ function SubmitOnboardingButton() {
 }
 
 export function OnboardingWizard() {
+  const { t } = useLocale();
   const [step, setStep] = useState(0);
   const [mode, setMode] = useState<"recommended" | "custom" | null>(null);
   const [count, setCount] = useState(3);
@@ -58,10 +60,7 @@ export function OnboardingWizard() {
     mode === "recommended" || (mode === "custom" && names.slice(0, count).every((n) => n.trim().length > 0));
 
   return (
-    <div className="relative flex min-h-dvh flex-col bg-gradient-to-b from-amber-50/90 to-background dark:from-amber-950/25">
-      <div className="pointer-events-auto absolute right-3 top-3 z-10 sm:right-4 sm:top-4">
-        <LanguageSwitcher />
-      </div>
+    <div className="flex min-h-dvh flex-col bg-gradient-to-b from-amber-50/90 to-background dark:from-amber-950/25">
       <div className="mx-auto flex w-full max-w-md flex-1 flex-col px-4 py-8">
         <div className="mb-6 flex items-center gap-2">
           {["Chào", "Ví", "Tiền tệ", "Xong"].map((label, i) => (
@@ -283,6 +282,13 @@ export function OnboardingWizard() {
             </motion.div>
           ) : null}
         </AnimatePresence>
+
+        <div className="mt-8 flex justify-center border-t border-border/60 pt-6">
+          <div className="flex flex-col items-center gap-2">
+            <span className="text-xs font-medium text-muted-foreground">{t("common_language")}</span>
+            <LanguageSwitcher />
+          </div>
+        </div>
       </div>
     </div>
   );

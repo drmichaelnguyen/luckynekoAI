@@ -34,10 +34,7 @@ export function RegisterForm() {
     safeFrom !== "/" ? `/login?from=${encodeURIComponent(safeFrom)}` : "/login";
 
   return (
-    <div className="relative flex min-h-dvh flex-col items-center justify-center bg-gradient-to-b from-amber-50/80 to-background px-4 py-10 dark:from-amber-950/20">
-      <div className="pointer-events-auto absolute right-3 top-3 z-10 sm:right-4 sm:top-4">
-        <LanguageSwitcher />
-      </div>
+    <div className="flex min-h-dvh flex-col items-center justify-center bg-gradient-to-b from-amber-50/80 to-background px-4 py-10 dark:from-amber-950/20">
       <div className="mb-6 flex flex-col items-center gap-2 text-center">
         <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-50 ring-1 ring-amber-200/80 dark:bg-amber-950/40 dark:ring-amber-800/60">
           <LuckyNekoMascot variant="hero" celebrateOnMount />
@@ -97,6 +94,10 @@ export function RegisterForm() {
             {t("guide_link_label")}
           </Link>
         </p>
+        <div className="flex flex-col items-center gap-2 border-t border-border/70 pt-4">
+          <span className="text-xs font-medium text-muted-foreground">{t("common_language")}</span>
+          <LanguageSwitcher />
+        </div>
       </form>
     </div>
   );

@@ -59,7 +59,7 @@ const en: GuideContent = {
       bullets: [
         "Receipts and Canadian paystub photos work best with good lighting and the full receipt in frame.",
         "Back up from Tools → Download ledger (JSON) for a small file, or Download full backup (ZIP) to include saved images for restore or your own archives.",
-        "Language: in chat, tap your name (or Tools → Profile) and use English / Tiếng Việt at the top of that panel. On sign-in, register, this guide, or onboarding, the switcher stays at the top of the page.",
+        "Language: in chat, tap your name or the account icon → Tools opens on Profile; use English / Tiếng Việt at the top of that panel. On sign-in, register, this guide, or onboarding, language is at the bottom of the form (not over other buttons).",
       ],
     },
   ],
@@ -112,7 +112,7 @@ const vi: GuideContent = {
       bullets: [
         "Hóa đơn / phiếu lương Canada: chụp đủ sáng, thấy cả tờ trong khung.",
         "Sao lưu: Công cụ → Tải sổ (JSON) cho file nhỏ, hoặc Tải bản đầy đủ (ZIP) gồm cả ảnh đã lưu.",
-        "Ngôn ngữ: trong chat, chạm tên bạn (hoặc Công cụ → Hồ sơ) rồi chọn English / Tiếng Việt ở đầu bảng đó. Trang đăng nhập, đăng ký, hướng dẫn hoặc bắt đầu vẫn có nút góc trên.",
+        "Ngôn ngữ: trong chat, chạm tên hoặc biểu tượng tài khoản → mở Công cụ ở tab Hồ sơ; chọn English / Tiếng Việt ở đầu bảng. Trang đăng nhập, đăng ký, hướng dẫn hoặc bắt đầu: chọn ngôn ngữ ở cuối biểu mẫu (không che nút khác).",
       ],
     },
   ],

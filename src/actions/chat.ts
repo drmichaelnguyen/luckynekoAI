@@ -160,15 +160,21 @@ Conversation memory:
 
 assistantMessage should be a concise, human summary of what you understood (1-3 sentences), not raw JSON.`;
 
+const VI_CHAT_LOCALE_PREAMBLE = `CRITICAL — The user's app UI is set to VIETNAMESE (Tiếng Việt).
+You MUST write these JSON fields entirely in natural Vietnamese: assistantMessage, followUpQuestion, extractedTextSummary.
+Do not use English for those three fields. Short labels inside structured objects (e.g. merchant names from a receipt) may stay as read from the document.
+JSON property names and documentKind enum values must remain exactly in English as specified below.
+category and walletLabel strings must match USER LEDGER CONTEXT exactly (often English labels from the database).
+
+---
+
+`;
+
 function chatSystemInstructionForLocale(locale: Locale): string {
   if (locale !== "vi") return SYSTEM_INSTRUCTION;
-  return `${SYSTEM_INSTRUCTION}
+  return `${VI_CHAT_LOCALE_PREAMBLE}${SYSTEM_INSTRUCTION}
 
-— Giao diện người dùng: Tiếng Việt —
-• assistantMessage, followUpQuestion và extractedTextSummary phải viết bằng tiếng Việt tự nhiên, thân thiện (vẫn là trợ lý tài chính chủ đề mèo may mắn / Canada).
-• Giữ nguyên tên thuộc tính JSON và các giá trị documentKind bằng tiếng Anh đúng như quy định ở trên.
-• Trường category và walletLabel trong các đối tượng có cấu trúc phải khớp CHÍNH XÁC chuỗi trong USER LEDGER CONTEXT (có thể là tiếng Anh từ cơ sở dữ liệu).
-• Văn bản đọc từ chứng từ (merchant, mô tả dòng) có thể theo ngôn ngữ trên hóa đơn hoặc phiếu lương.`;
+REMINDER (Vietnamese UI): assistantMessage, followUpQuestion, extractedTextSummary → Vietnamese only, every turn.`;
 }
 
 const ConversationTurnSchema = z.object({
@@ -181,6 +187,8 @@ function buildUserPrompt(input: {
   message: string;
   shareContext?: { title?: string; text?: string; url?: string };
   financeContext?: string;
+  /** When vi, reinforce Vietnamese for model-visible user strings. */
+  responseLocale?: Locale;
   conversation?: {
     packedFinancialSummary: string | null;
     recentPriorTurns: ConversationTurnForApi[];
@@ -232,6 +240,10 @@ function buildUserPrompt(input: {
   }
 
   lines.push("");
+  if (input.responseLocale === "vi") {
+    lines.push("APP_LANGUAGE: Vietnamese. Your assistantMessage, followUpQuestion, and extractedTextSummary must be in Vietnamese.");
+    lines.push("");
+  }
   lines.push("Return ONLY valid JSON matching the schema described in your system instructions.");
   return lines.join("\n");
 }
@@ -245,7 +257,7 @@ export async function handleChatInput(formData: FormData) {
     };
   }
 
-  const localeFromForm = String(formData.get("locale") ?? "").trim();
+  const localeFromForm = String(formData.get("locale") ?? "").trim().toLowerCase();
   const cookieStore = await cookies();
   const uiLocale: Locale = parseLocale(
     localeFromForm.length > 0 ? localeFromForm : cookieStore.get(LOCALE_COOKIE)?.value,
@@ -335,6 +347,7 @@ export async function handleChatInput(formData: FormData) {
     message,
     shareContext,
     financeContext,
+    responseLocale: uiLocale,
     conversation:
       packedFinancialSummary || recentPriorTurns.length > 0
         ? { packedFinancialSummary, recentPriorTurns }

@@ -100,7 +100,7 @@ export async function resolveDocumentImportAction(formData: FormData): Promise<R
     return { ok: false, error: "Sign in to continue." };
   }
 
-  const localeFromForm = String(formData.get("locale") ?? "").trim();
+  const localeFromForm = String(formData.get("locale") ?? "").trim().toLowerCase();
   const cookieStore = await cookies();
   const uiLocale: Locale = parseLocale(
     localeFromForm.length > 0 ? localeFromForm : cookieStore.get(LOCALE_COOKIE)?.value,
