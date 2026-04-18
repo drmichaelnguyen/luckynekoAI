@@ -208,6 +208,14 @@ const ConversationTurnSchema = z.object({
   extractionNote: z.string().optional(),
 });
 
+function todayIso(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function buildUserPrompt(input: {
   message: string;
   hasAttachments: boolean;
@@ -219,6 +227,9 @@ function buildUserPrompt(input: {
   };
 }): string {
   const lines: string[] = [];
+
+  lines.push(`TODAY'S DATE: ${todayIso()} — use this as the reference year/month for all dates.`);
+  lines.push("");
 
   if (input.conversation) {
     const pack = (input.conversation.packedFinancialSummary ?? "").trim();
