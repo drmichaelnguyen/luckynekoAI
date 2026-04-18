@@ -36,8 +36,8 @@ export async function updateProfileAction(
   const session = await auth();
   if (!session?.user?.id) return { ok: false, error: "Unauthorized.", message: null };
 
-  const name = typeof formData.get("name") === "string" ? formData.get("name")!.trim() : "";
-  const nickname = typeof formData.get("nickname") === "string" ? formData.get("nickname")!.trim() : "";
+  const name = typeof formData.get("name") === "string" ? (formData.get("name") as string).trim() : "";
+  const nickname = typeof formData.get("nickname") === "string" ? (formData.get("nickname") as string).trim() : "";
   if (name.length > 120 || nickname.length > 80) {
     return { ok: false, error: "Name or nickname is too long.", message: null };
   }

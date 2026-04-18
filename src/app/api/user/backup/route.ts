@@ -17,7 +17,7 @@ export async function GET(req: Request) {
   try {
     if (fullZip) {
       const { buffer, filename } = await buildLedgerBackupZip(prisma, session.user.id, session.user.email);
-      return new NextResponse(buffer, {
+      return new NextResponse(buffer as unknown as BodyInit, {
         status: 200,
         headers: {
           "Content-Type": "application/zip",
