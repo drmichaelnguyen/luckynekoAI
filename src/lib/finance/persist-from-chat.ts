@@ -131,3 +131,43 @@ export async function persistFreeformLedgerEntry(
       : `Saved to ${wallet.name} · ${categoryName ?? "Other"}.`;
   return { saved: true, detail, transactionId: created.id };
 }
+
+export async function persistTransactionListLedgerEntries(
+  db: PrismaClient,
+  userId: string,
+  transactions: Record<string, unknown>[],
+): Promise<{ saved: boolean; detail: string; transactionIds: string[] }> {
+  const transactionIds: string[] = [];
+  let savedCount = 0;
+  let pendingCount = 0;
+
+  for (const [index, transaction] of transactions.entries()) {
+    const rawStructuredJson = JSON.stringify({
+      documentKind: "transaction_list_capture",
+      transactionIndex: index,
+      transaction,
+    });
+    const persisted = await persistFreeformLedgerEntry(db, userId, transaction, rawStructuredJson);
+    if (!persisted.saved || !persisted.transactionId) continue;
+    savedCount += 1;
+    transactionIds.push(persisted.transactionId);
+    if (persisted.detail.includes("Saved as pending")) {
+      pendingCount += 1;
+    }
+  }
+
+  if (savedCount === 0) {
+    return {
+      saved: false,
+      detail: "I couldn't find any complete transactions to save from that screenshot.",
+      transactionIds,
+    };
+  }
+
+  const detail =
+    pendingCount > 0
+      ? `Saved ${savedCount} transaction${savedCount === 1 ? "" : "s"} from the screenshot. ${pendingCount} ${pendingCount === 1 ? "needs" : "need"} confirmation in Tools → Confirm.`
+      : `Saved ${savedCount} transaction${savedCount === 1 ? "" : "s"} from the screenshot.`;
+
+  return { saved: true, detail, transactionIds };
+}

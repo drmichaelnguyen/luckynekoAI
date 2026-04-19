@@ -1,53 +1,34 @@
 "use client";
 
-import { signIn } from "next-auth/react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useActionState } from "react";
+import { useFormStatus } from "react-dom";
 
+import { loginAction, type LoginState } from "@/actions/login";
 import { LanguageSwitcher } from "@/components/i18n/language-switcher";
 import { LuckyNekoMascot } from "@/components/mascot/lucky-neko";
 import { useLocale } from "@/contexts/locale-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
+function LoginSubmit() {
+  const { pending } = useFormStatus();
+  const { t } = useLocale();
+  return (
+    <Button type="submit" className="w-full" disabled={pending}>
+      {pending ? t("login_submit_pending") : t("login_submit")}
+    </Button>
+  );
+}
+
 export function LoginForm() {
   const { t } = useLocale();
-  const router = useRouter();
   const searchParams = useSearchParams();
   const from = searchParams.get("from") || "/";
+  const reset = searchParams.get("reset");
   const safeFrom = from.startsWith("/") && !from.startsWith("//") ? from : "/";
-
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setPending(true);
-    try {
-      const result = await signIn("credentials", {
-        email: email.trim().toLowerCase(),
-        password,
-        redirect: false,
-      });
-      const failed =
-        !result ||
-        (typeof result === "object" &&
-          (("error" in result && Boolean(result.error)) ||
-            ("ok" in result && result.ok === false)));
-      if (failed) {
-        setError(t("login_error_credentials"));
-        return;
-      }
-      router.push(safeFrom);
-      router.refresh();
-    } finally {
-      setPending(false);
-    }
-  }
+  const [state, formAction] = useActionState(loginAction, { error: null } satisfies LoginState);
 
   const registerHref =
     safeFrom !== "/" ? `/register?from=${encodeURIComponent(safeFrom)}` : "/register";
@@ -66,10 +47,8 @@ export function LoginForm() {
         <LanguageSwitcher />
       </div>
 
-      <form
-        onSubmit={onSubmit}
-        className="w-full max-w-sm space-y-4 rounded-2xl border bg-card p-6 shadow-sm"
-      >
+      <form action={formAction} className="w-full max-w-sm space-y-4 rounded-2xl border bg-card p-6 shadow-sm">
+        <input type="hidden" name="redirectTo" value={safeFrom} />
         <div className="space-y-2">
           <label htmlFor="email" className="text-sm font-medium">
             {t("login_email")}
@@ -80,8 +59,6 @@ export function LoginForm() {
             type="email"
             autoComplete="email"
             required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
             placeholder="you@example.com"
           />
         </div>
@@ -95,16 +72,20 @@ export function LoginForm() {
             type="password"
             autoComplete="current-password"
             required
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
             placeholder="••••••••"
             minLength={8}
           />
         </div>
-        {error ? <p className="text-sm text-destructive">{error}</p> : null}
-        <Button type="submit" className="w-full" disabled={pending}>
-          {pending ? t("login_submit_pending") : t("login_submit")}
-        </Button>
+        {reset === "success" ? (
+          <p className="text-sm text-emerald-700 dark:text-emerald-400">{t("login_reset_success")}</p>
+        ) : null}
+        {state.error ? <p className="text-sm text-destructive">{state.error}</p> : null}
+        <LoginSubmit />
+        <p className="text-center text-sm text-muted-foreground">
+          <Link href="/forgot-password" className="font-medium text-primary underline-offset-4 hover:underline">
+            {t("login_forgot_password")}
+          </Link>
+        </p>
         <p className="text-center text-sm text-muted-foreground">
           {t("login_no_account")}{" "}
           <Link href={registerHref} className="font-medium text-primary underline-offset-4 hover:underline">

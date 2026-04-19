@@ -11,10 +11,29 @@ export type MessageKey =
   | "login_email"
   | "login_password"
   | "login_error_credentials"
+  | "login_reset_success"
   | "login_submit"
   | "login_submit_pending"
   | "login_no_account"
   | "login_create_one"
+  | "login_forgot_password"
+  | "forgot_password_title"
+  | "forgot_password_subtitle"
+  | "forgot_password_email"
+  | "forgot_password_submit"
+  | "forgot_password_submit_pending"
+  | "forgot_password_back_to_login"
+  | "forgot_password_contact_admin"
+  | "forgot_password_admin_note"
+  | "reset_password_title"
+  | "reset_password_subtitle"
+  | "reset_password_invalid"
+  | "reset_password_new_password"
+  | "reset_password_confirm_password"
+  | "reset_password_submit"
+  | "reset_password_submit_pending"
+  | "reset_password_back_to_login"
+  | "reset_password_request_new_link"
   | "register_title"
   | "register_subtitle"
   | "register_email"
@@ -62,10 +81,29 @@ const en: Record<MessageKey, string> = {
   login_email: "Email",
   login_password: "Password",
   login_error_credentials: "Wrong email or password.",
+  login_reset_success: "Password updated. Sign in with your new password.",
   login_submit: "Sign in",
   login_submit_pending: "Signing in…",
   login_no_account: "No account?",
   login_create_one: "Create one",
+  login_forgot_password: "Forgot password?",
+  forgot_password_title: "Reset your password",
+  forgot_password_subtitle: "Enter your email and we will send you a password reset link.",
+  forgot_password_email: "Email",
+  forgot_password_submit: "Send reset link",
+  forgot_password_submit_pending: "Sending reset link…",
+  forgot_password_back_to_login: "Back to sign in",
+  forgot_password_contact_admin: "To reset your password, contact the admin at",
+  forgot_password_admin_note: "Password resets are handled manually right now.",
+  reset_password_title: "Choose a new password",
+  reset_password_subtitle: "Set a new password for your NekoZeni account.",
+  reset_password_invalid: "This reset link is invalid or expired.",
+  reset_password_new_password: "New password",
+  reset_password_confirm_password: "Confirm new password",
+  reset_password_submit: "Update password",
+  reset_password_submit_pending: "Updating password…",
+  reset_password_back_to_login: "Back to sign in",
+  reset_password_request_new_link: "Request a new reset link",
   register_title: "Create your account",
   register_subtitle:
     "One email, one password — your lucky cat treasurer stays private to you.",
@@ -117,10 +155,29 @@ const vi: Record<MessageKey, string> = {
   login_email: "Email",
   login_password: "Mật khẩu",
   login_error_credentials: "Email hoặc mật khẩu không đúng.",
+  login_reset_success: "Mật khẩu đã được cập nhật. Hãy đăng nhập bằng mật khẩu mới.",
   login_submit: "Đăng nhập",
   login_submit_pending: "Đang đăng nhập…",
   login_no_account: "Chưa có tài khoản?",
   login_create_one: "Tạo tài khoản",
+  login_forgot_password: "Quên mật khẩu?",
+  forgot_password_title: "Đặt lại mật khẩu",
+  forgot_password_subtitle: "Nhập email của bạn và chúng tôi sẽ gửi liên kết đặt lại mật khẩu.",
+  forgot_password_email: "Email",
+  forgot_password_submit: "Gửi liên kết đặt lại",
+  forgot_password_submit_pending: "Đang gửi liên kết…",
+  forgot_password_back_to_login: "Quay lại đăng nhập",
+  forgot_password_contact_admin: "Để đặt lại mật khẩu, hãy liên hệ quản trị viên tại",
+  forgot_password_admin_note: "Hiện tại việc đặt lại mật khẩu được xử lý thủ công.",
+  reset_password_title: "Chọn mật khẩu mới",
+  reset_password_subtitle: "Đặt mật khẩu mới cho tài khoản NekoZeni của bạn.",
+  reset_password_invalid: "Liên kết đặt lại này không hợp lệ hoặc đã hết hạn.",
+  reset_password_new_password: "Mật khẩu mới",
+  reset_password_confirm_password: "Xác nhận mật khẩu mới",
+  reset_password_submit: "Cập nhật mật khẩu",
+  reset_password_submit_pending: "Đang cập nhật mật khẩu…",
+  reset_password_back_to_login: "Quay lại đăng nhập",
+  reset_password_request_new_link: "Yêu cầu liên kết mới",
   register_title: "Tạo tài khoản",
   register_subtitle: "Một email, một mật khẩu — kho bạc mèo may mắn chỉ dành riêng cho bạn.",
   register_email: "Email",

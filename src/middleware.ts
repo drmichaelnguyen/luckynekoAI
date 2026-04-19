@@ -4,7 +4,17 @@ import type { NextRequest } from "next/server";
 
 function isPublicPath(pathname: string) {
   if (pathname === "/manifest.json" || pathname === "/favicon.ico") return true;
-  const publicPrefixes = ["/login", "/register", "/guide", "/api/auth", "/api/locale", "/share"];
+  const publicPrefixes = [
+    "/login",
+    "/login-basic",
+    "/register",
+    "/forgot-password",
+    "/reset-password",
+    "/guide",
+    "/api/auth",
+    "/api/locale",
+    "/share",
+  ];
   return publicPrefixes.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 

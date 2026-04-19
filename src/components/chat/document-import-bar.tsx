@@ -3,10 +3,14 @@
 import { Loader2 } from "lucide-react";
 import { useState } from "react";
 
-import { persistReceiptSplitAction, resolveDocumentImportAction } from "@/actions/document-import";
+import {
+  persistReceiptSplitAction,
+  persistTransactionListAction,
+  resolveDocumentImportAction,
+} from "@/actions/document-import";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import type { PendingDocumentImport, ReceiptSplitItem } from "@/types/chat";
+import type { PendingDocumentImport, ReceiptSplitItem, TransactionImportItem } from "@/types/chat";
 
 type Props = {
   pending: PendingDocumentImport;
@@ -89,6 +93,70 @@ function SplitReview({
   );
 }
 
+function TransactionListReview({
+  items,
+  chatTurnId,
+  onResolved,
+  onDismiss,
+}: {
+  items: TransactionImportItem[];
+  chatTurnId: string;
+  onResolved: (msg: string) => void;
+  onDismiss: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await persistTransactionListAction(chatTurnId);
+      if (r.ok) {
+        onResolved(r.message);
+        onDismiss();
+      } else {
+        setError(r.message);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-medium text-amber-950 dark:text-amber-50">
+        Apple Pay / wallet screenshot detected — review the transactions below, then log them all:
+      </p>
+      <div className="space-y-1.5">
+        {items.map((item, i) => (
+          <div key={i} className="rounded-lg border bg-white/60 px-2 py-1.5 text-xs dark:bg-background/40">
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate font-medium text-foreground">{item.merchant ?? "Unknown merchant"}</span>
+              <span className="shrink-0 text-foreground">
+                {item.currency ?? "CAD"} {typeof item.amount === "number" ? item.amount.toFixed(2) : "?"}
+              </span>
+            </div>
+            <div className="mt-0.5 text-[11px] text-muted-foreground">
+              {[item.transactionDate, item.category, item.notes].filter(Boolean).join(" · ") || "Pending details from screenshot"}
+            </div>
+          </div>
+        ))}
+      </div>
+      {error && <p className="text-xs text-destructive">{error}</p>}
+      <div className="flex flex-wrap gap-2 pt-1">
+        <Button type="button" size="sm" className="h-8 gap-1.5 text-xs" disabled={busy} onClick={() => void save()}>
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+          Log all
+        </Button>
+        <Button type="button" size="sm" variant="ghost" className="h-8 text-xs" disabled={busy} onClick={onDismiss}>
+          Later
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function DocumentImportBar({ pending, onResolved, onDismiss }: Props) {
   const [editOpen, setEditOpen] = useState(false);
   const [correctionText, setCorrectionText] = useState("");
@@ -123,6 +191,19 @@ export function DocumentImportBar({ pending, onResolved, onDismiss }: Props) {
       <div className="rounded-xl border border-amber-200/80 bg-amber-50/90 px-3 py-2.5 dark:border-amber-900/50 dark:bg-amber-950/35">
         <SplitReview
           items={pending.splitItems}
+          chatTurnId={pending.chatTurnId}
+          onResolved={onResolved}
+          onDismiss={onDismiss}
+        />
+      </div>
+    );
+  }
+
+  if (pending.transactionItems && pending.transactionItems.length > 0) {
+    return (
+      <div className="rounded-xl border border-amber-200/80 bg-amber-50/90 px-3 py-2.5 dark:border-amber-900/50 dark:bg-amber-950/35">
+        <TransactionListReview
+          items={pending.transactionItems}
           chatTurnId={pending.chatTurnId}
           onResolved={onResolved}
           onDismiss={onDismiss}

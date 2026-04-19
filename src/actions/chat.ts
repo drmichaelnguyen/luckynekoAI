@@ -20,6 +20,7 @@ import {
 import type { ConversationTurnForApi } from "@/lib/chat/conversation-context";
 import { prisma } from "@/lib/prisma";
 import type { PendingDocumentImport } from "@/types/chat";
+import type { TransactionImportItem } from "@/types/chat";
 import {
   acknowledgeShareImport,
   getShareImport,
@@ -33,9 +34,11 @@ const GeminiResponseSchema = z
       "receipt",
       "canadian_paystub",
       "payroll_document",
+      "transaction_list_capture",
       "unknown_document",
     ]),
     transaction: z.record(z.string(), z.unknown()).nullable().optional(),
+    transactionList: z.array(z.record(z.string(), z.unknown())).nullable().optional(),
     receipt: z.record(z.string(), z.unknown()).nullable().optional(),
     paystub: z.record(z.string(), z.unknown()).nullable().optional(),
     assistantMessage: z.string(),
@@ -109,8 +112,9 @@ You MUST respond with JSON only (no markdown fences).
 
 Your JSON MUST match this shape (optional keys only when relevant):
 {
-  "documentKind": "freeform_transaction" | "receipt" | "payroll_document" | "unknown_document",
+  "documentKind": "freeform_transaction" | "receipt" | "payroll_document" | "transaction_list_capture" | "unknown_document",
   "transaction": null | object,
+  "transactionList": null | object[],
   "receipt": null | object,
   "paystub": null | object,
   "assistantMessage": string,
@@ -123,17 +127,18 @@ Your JSON MUST match this shape (optional keys only when relevant):
 
 Rules:
 - The user message may include USER PREFERENCES (how to address them in chat) and FINANCIAL PLANS (spending budgets and savings goals). Follow those when giving advice; do not ignore a stated monthly cap or savings target without asking first.
-- Choose exactly one primary extraction target: populate ONLY ONE of transaction/receipt/paystub with an object; set the others to null.
+- Choose exactly one primary extraction target: populate ONLY ONE of transaction/transactionList/receipt/paystub; set the others to null.
 - If the user only typed text describing a purchase, use documentKind "freeform_transaction" and populate transaction.
 - If the uploaded file is a clear retail or service purchase receipt or bill (you can read totals and context), use documentKind "receipt" and populate receipt with structured expense data suitable for database insertion.
 - If the uploaded file is a payroll or payslip document from Canada or Vietnam, use documentKind "payroll_document" and populate paystub with payroll fields suitable for database insertion.
+- If the uploaded file is a wallet or Apple Pay activity screenshot showing MULTIPLE completed transactions in a list, use documentKind "transaction_list_capture" and populate transactionList with one transaction object per visible line item.
 - If you cannot confidently classify the file, use documentKind "unknown_document", set all extraction objects to null, explain briefly in assistantMessage, and ask what it is in followUpQuestion.
 
 Uploaded files (images/PDF) — pipeline before anything hits the ledger:
 1) Classify first: is this a financial document about money (retail/service receipt, bill, paid invoice, payroll document, bank or card slip with amounts)? If clearly NO, use documentKind "unknown_document", all extraction objects null, stop — do not pretend it is a receipt.
-2) If YES: use documentKind "receipt" or "payroll_document" and populate only that object; use null for unreadable fields instead of guessing.
+2) If YES: use documentKind "receipt", "payroll_document", or "transaction_list_capture" and populate only that target; use null for unreadable fields instead of guessing.
 3) extractedTextSummary: when documentKind is receipt or payroll_document AND the user attached a file, you MUST set this to a plain-text, human-readable readout of the document (merchant lines, dates, line items, taxes, totals, payment method or payroll sections) — like reading the page aloud, not JSON.
-4) awaitingLedgerDecision: set true when there is a file attachment and documentKind is receipt or payroll_document. The user must explicitly confirm in the app before a ledger row is created from that upload; do not state that the receipt is already saved in their ledger from the file alone.
+4) awaitingLedgerDecision: set true when there is a file attachment and documentKind is receipt, payroll_document, or transaction_list_capture. The user must explicitly confirm in the app before a ledger row is created from that upload; do not state that the document is already saved in their ledger from the file alone.
 5) Typed-only purchases (no file) use freeform_transaction; omit awaitingLedgerDecision or set false.
 6) Amount normalization matters: return numeric amounts, not formatted strings. For VND, return whole-dong numbers like 1250000. For CAD, return decimal numbers like 47.82.
 7) Dates should be normalized to ISO yyyy-mm-dd whenever the document makes the date reasonably clear.
@@ -153,6 +158,16 @@ Transaction object fields (use null for unknown):
 - needsUserConfirm: boolean — true if this might be a repeating bill, loan, subscription, or utility charge
 - userConfirmReason: string | null — short reason when needsUserConfirm is true
 - payeeKind: "purchase" | "bill" | "loan" | "subscription" | "utility" | "income" | "transfer" | null
+
+transactionList rules for Apple Pay / wallet screenshots:
+- transactionList items use the SAME fields as Transaction object above.
+- One item per visible completed transaction row.
+- Merchant should be the displayed merchant or service name.
+- amount should be positive magnitude; use direction for sign semantics.
+- For Apple Pay / wallet activity screenshots, direction is usually "out" unless the screenshot clearly shows a refund or incoming transfer.
+- Use today’s year when the screenshot only shows relative timing like "44 minutes ago" or "Yesterday"; convert "Yesterday" to the actual ISO date relative to TODAY'S DATE.
+- If category is unclear, choose the closest category from USER LEDGER CONTEXT or use "Other".
+- If fewer than 1 complete transaction row is legible, do not use transaction_list_capture.
 
 Bookkeeping rules for freeform_transaction:
 - When the user describes everyday shopping, use recurrence "one_time" and needsUserConfirm false unless unclear.
@@ -545,12 +560,18 @@ export async function handleChatInput(formData: FormData) {
     const structured = {
       documentKind: data.documentKind,
       transaction: data.transaction ?? null,
+      transactionList: data.transactionList ?? null,
       receipt: data.receipt ?? null,
       paystub: data.paystub ?? null,
       extractedTextSummary: data.extractedTextSummary ?? null,
       awaitingLedgerDecision: Boolean(
         data.awaitingLedgerDecision ??
-          (hadFileUpload && (data.documentKind === "receipt" || isPayrollDocumentKind(data.documentKind))),
+          (
+            hadFileUpload &&
+            (data.documentKind === "receipt" ||
+              isPayrollDocumentKind(data.documentKind) ||
+              data.documentKind === "transaction_list_capture")
+          ),
       ),
     };
 
@@ -561,6 +582,7 @@ export async function handleChatInput(formData: FormData) {
         transactionPresent: Boolean(data.transaction),
         receiptPresent: Boolean(data.receipt),
         paystubPresent: Boolean(data.paystub),
+        transactionListCount: Array.isArray(data.transactionList) ? data.transactionList.length : 0,
       }).slice(0, 4000);
     } catch {
       structuredExcerpt = null;
@@ -572,7 +594,9 @@ export async function handleChatInput(formData: FormData) {
     const isFinancialUpload =
       hadFileUpload &&
       chatTurnId &&
-      (data.documentKind === "receipt" || isPayrollDocumentKind(data.documentKind));
+      (data.documentKind === "receipt" ||
+        isPayrollDocumentKind(data.documentKind) ||
+        data.documentKind === "transaction_list_capture");
 
     if (isFinancialUpload) {
       const proposed =
@@ -587,7 +611,14 @@ export async function handleChatInput(formData: FormData) {
               !Array.isArray(data.paystub)
             ? (data.paystub as Record<string, unknown>)
             : null;
-      if (proposed) {
+      const proposedItems =
+        data.documentKind === "transaction_list_capture" && Array.isArray(data.transactionList)
+          ? data.transactionList.filter(
+              (item): item is Record<string, unknown> =>
+                !!item && typeof item === "object" && !Array.isArray(item),
+            )
+          : [];
+      if (proposed || proposedItems.length > 0) {
         const summaryFromModel =
           typeof data.extractedTextSummary === "string" ? data.extractedTextSummary.trim() : "";
         const extracted =
@@ -599,13 +630,16 @@ export async function handleChatInput(formData: FormData) {
             ? "receipt"
             : data.documentKind === "canadian_paystub"
               ? "canadian_paystub"
-              : "payroll_document";
+              : data.documentKind === "transaction_list_capture"
+                ? "transaction_list_capture"
+                : "payroll_document";
         const payload = {
           version: PENDING_IMPORT_VERSION,
           chatTurnId,
           documentKind: pendingKind,
           extractedTextSummary: extracted,
           proposed,
+          ...(proposedItems.length > 0 ? { proposedItems } : {}),
         };
         pendingImportJson = JSON.stringify(payload).slice(0, 500_000);
         const splitItems =
@@ -618,11 +652,43 @@ export async function handleChatInput(formData: FormData) {
                 direction: item.direction === "in" ? ("in" as const) : ("out" as const),
               }))
             : undefined;
+        const transactionItems: TransactionImportItem[] | undefined =
+          proposedItems.length > 0
+            ? proposedItems.map((item) => ({
+                amount: typeof item.amount === "number" ? item.amount : null,
+                currency: typeof item.currency === "string" ? item.currency : null,
+                merchant: typeof item.merchant === "string" ? item.merchant : null,
+                category: typeof item.category === "string" ? item.category : null,
+                transactionDate: typeof item.transactionDate === "string" ? item.transactionDate : null,
+                notes: typeof item.notes === "string" ? item.notes : null,
+                walletLabel: typeof item.walletLabel === "string" ? item.walletLabel : null,
+                direction:
+                  item.direction === "in" || item.direction === "out" ? item.direction : null,
+                recurrence:
+                  item.recurrence === "one_time" || item.recurrence === "recurrent" || item.recurrence === "unknown"
+                    ? item.recurrence
+                    : null,
+                needsUserConfirm: item.needsUserConfirm === true,
+                userConfirmReason:
+                  typeof item.userConfirmReason === "string" ? item.userConfirmReason : null,
+                payeeKind:
+                  item.payeeKind === "purchase" ||
+                  item.payeeKind === "bill" ||
+                  item.payeeKind === "loan" ||
+                  item.payeeKind === "subscription" ||
+                  item.payeeKind === "utility" ||
+                  item.payeeKind === "income" ||
+                  item.payeeKind === "transfer"
+                    ? item.payeeKind
+                    : null,
+              }))
+            : undefined;
         pendingDocumentImport = {
           chatTurnId,
           documentKind: pendingKind,
           extractedTextSummary: extracted,
           splitItems,
+          transactionItems,
         };
       }
     }

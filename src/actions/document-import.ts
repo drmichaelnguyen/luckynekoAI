@@ -4,17 +4,28 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { z } from "zod";
 
 import { auth } from "@/auth";
+import { persistTransactionListLedgerEntries } from "@/lib/finance/persist-from-chat";
 import { persistPaystubLedgerEntry, persistReceiptLedgerEntry } from "@/lib/finance/persist-receipt-paystub";
-import type { PendingImportPayloadV1 } from "@/lib/document-import/pending-import-shared";
+import type { PendingImportPayloadV1, PendingImportPayloadV2 } from "@/lib/document-import/pending-import-shared";
 import { prisma } from "@/lib/prisma";
 
-const PendingPayloadSchema = z.object({
-  version: z.literal(1),
-  chatTurnId: z.string(),
-  documentKind: z.enum(["receipt", "canadian_paystub", "payroll_document"]),
-  extractedTextSummary: z.string(),
-  proposed: z.record(z.string(), z.unknown()),
-});
+const PendingPayloadSchema = z.union([
+  z.object({
+    version: z.literal(1),
+    chatTurnId: z.string(),
+    documentKind: z.enum(["receipt", "canadian_paystub", "payroll_document"]),
+    extractedTextSummary: z.string(),
+    proposed: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
+    version: z.literal(2),
+    chatTurnId: z.string(),
+    documentKind: z.enum(["receipt", "canadian_paystub", "payroll_document", "transaction_list_capture"]),
+    extractedTextSummary: z.string(),
+    proposed: z.record(z.string(), z.unknown()).nullable(),
+    proposedItems: z.array(z.record(z.string(), z.unknown())).optional(),
+  }),
+]);
 
 const MergeSchema = z.object({
   receipt: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -124,7 +135,7 @@ export async function resolveDocumentImportAction(formData: FormData): Promise<R
     return { ok: false, error: "Missing pending import data." };
   }
 
-  let pending: PendingImportPayloadV1;
+  let pending: PendingImportPayloadV1 | PendingImportPayloadV2;
   try {
     const raw = JSON.parse(first.pendingImportJson) as unknown;
     const parsed = PendingPayloadSchema.safeParse(raw);
@@ -136,14 +147,23 @@ export async function resolveDocumentImportAction(formData: FormData): Promise<R
     return { ok: false, error: "Could not read pending import data." };
   }
 
-  let finalStructured = pending.proposed;
+  const initialProposed = pending.proposed;
+  if (!initialProposed || typeof initialProposed !== "object" || Array.isArray(initialProposed)) {
+    return { ok: false, error: "Missing proposed import data." };
+  }
+
+  let finalStructured: Record<string, unknown> = initialProposed;
   let trainingExampleJson: string | null = null;
   let markedForTraining = false;
+
+  if (pending.documentKind === "transaction_list_capture") {
+    return { ok: false, error: "Use Log all for transaction-list screenshots." };
+  }
 
   if (mode === "edit") {
     finalStructured = await mergeProposedWithUserCorrections({
       documentKind: pending.documentKind,
-      proposed: pending.proposed,
+      proposed: initialProposed,
       extractedTextSummary: pending.extractedTextSummary,
       correctionText,
     });
@@ -153,7 +173,7 @@ export async function resolveDocumentImportAction(formData: FormData): Promise<R
         version: 1,
         documentKind: pending.documentKind,
         extractedTextSummary: pending.extractedTextSummary,
-        originalProposed: pending.proposed,
+        originalProposed: initialProposed,
         userCorrectionInstructions: correctionText,
         mergedFinal: finalStructured,
         mediaIds: rows.map((r) => r.id),
@@ -252,4 +272,66 @@ export async function persistReceiptSplitAction(
   });
 
   return { ok: true, message: `Saved ${saved.length} split entr${saved.length === 1 ? "y" : "ies"}: ${saved.join(", ")}.` };
+}
+
+export async function persistTransactionListAction(
+  chatTurnId: string,
+): Promise<{ ok: boolean; message: string }> {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false, message: "Unauthorized" };
+
+  const rows = await prisma.storedMedia.findMany({
+    where: {
+      userId: session.user.id,
+      chatTurnId,
+      pendingImportJson: { not: null },
+    },
+    orderBy: { createdAt: "asc" },
+  });
+
+  if (rows.length === 0) {
+    return { ok: false, message: "Nothing is waiting for import, or it already expired. Send the screenshot again." };
+  }
+
+  const first = rows[0];
+  if (!first.pendingImportJson) {
+    return { ok: false, message: "Missing pending import data." };
+  }
+
+  let pending: PendingImportPayloadV1 | PendingImportPayloadV2;
+  try {
+    const raw = JSON.parse(first.pendingImportJson) as unknown;
+    const parsed = PendingPayloadSchema.safeParse(raw);
+    if (!parsed.success) {
+      return { ok: false, message: "Stored import data is invalid." };
+    }
+    pending = parsed.data;
+  } catch {
+    return { ok: false, message: "Could not read pending import data." };
+  }
+
+  if (pending.documentKind !== "transaction_list_capture") {
+    return { ok: false, message: "This import is not a transaction list screenshot." };
+  }
+
+  const proposedItems = Array.isArray(pending.proposedItems) ? pending.proposedItems : [];
+  const persist = await persistTransactionListLedgerEntries(prisma, session.user.id, proposedItems);
+  if (!persist.saved) {
+    return { ok: false, message: persist.detail };
+  }
+
+  await prisma.storedMedia.updateMany({
+    where: { userId: session.user.id, chatTurnId },
+    data: {
+      pendingImportJson: null,
+      transactionId: persist.transactionIds[0] ?? null,
+      structuredExcerpt: JSON.stringify({
+        documentKind: pending.documentKind,
+        transactionCount: persist.transactionIds.length,
+        importResolved: true,
+      }).slice(0, 4000),
+    },
+  });
+
+  return { ok: true, message: persist.detail };
 }
