@@ -706,7 +706,11 @@ export async function handleChatInput(formData: FormData) {
         ? data.assistantMessage.trim()
         : "I processed your upload but didn’t get a readable summary back. Try again, or add a short note about what the file is.";
     if (pendingDocumentImport) {
-      assistantMessage = `${assistantMessage}\n\n---\nFrom your file (readout):\n${pendingDocumentImport.extractedTextSummary}\n\n---\nUse the buttons under the chat to save this to your ledger as read, or edit details first. Edits are stored with the image for optional future training export.`;
+      const scanInstruction =
+        pendingDocumentImport.transactionItems && pendingDocumentImport.transactionItems.length > 0
+          ? "I found multiple transactions in the scan. Choose which ones to add using the checkboxes under the chat."
+          : "Use the buttons under the chat to save this to your ledger as read, or edit details first. Edits are stored with the image for optional future training export.";
+      assistantMessage = `${assistantMessage}\n\n---\nFrom your file (readout):\n${pendingDocumentImport.extractedTextSummary}\n\n---\n${scanInstruction}`;
     }
     if (
       data.documentKind === "freeform_transaction" &&

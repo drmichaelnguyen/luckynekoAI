@@ -276,6 +276,7 @@ export async function persistReceiptSplitAction(
 
 export async function persistTransactionListAction(
   chatTurnId: string,
+  selectedIndexes?: number[],
 ): Promise<{ ok: boolean; message: string }> {
   const session = await auth();
   if (!session?.user?.id) return { ok: false, message: "Unauthorized" };
@@ -314,7 +315,14 @@ export async function persistTransactionListAction(
     return { ok: false, message: "This import is not a transaction list screenshot." };
   }
 
-  const proposedItems = Array.isArray(pending.proposedItems) ? pending.proposedItems : [];
+  const allItems = Array.isArray(pending.proposedItems) ? pending.proposedItems : [];
+  const proposedItems =
+    Array.isArray(selectedIndexes) && selectedIndexes.length > 0
+      ? allItems.filter((_, index) => selectedIndexes.includes(index))
+      : allItems;
+  if (proposedItems.length === 0) {
+    return { ok: false, message: "Choose at least one scanned transaction to add." };
+  }
   const persist = await persistTransactionListLedgerEntries(prisma, session.user.id, proposedItems);
   if (!persist.saved) {
     return { ok: false, message: persist.detail };

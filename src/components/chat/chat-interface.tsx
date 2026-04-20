@@ -17,7 +17,15 @@ import {
 import { signOut, useSession } from "next-auth/react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import {
+  type ClipboardEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 
 import { packFinancialConversationAction } from "@/actions/chat-pack-context";
 import {
@@ -87,6 +95,12 @@ function base64ToFile(part: {
     bytes[i] = binary.charCodeAt(i);
   }
   return new File([bytes], part.name, { type: part.mimeType });
+}
+
+function pastedImageName(mimeType: string, index: number): string {
+  const ext = mimeType.split("/")[1]?.replace(/[^a-z0-9]+/gi, "").toLowerCase() || "png";
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `clipboard-image-${stamp}-${index + 1}.${ext}`;
 }
 
 type ChatSendResult =
@@ -303,6 +317,29 @@ export function ChatInterface() {
   const onPickFiles = (picked: FileList | null) => {
     if (!picked || picked.length === 0) return;
     setFiles((prev) => [...prev, ...Array.from(picked)]);
+  };
+
+  const onPasteComposer = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = Array.from(event.clipboardData.items);
+    const imageFiles = items
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item, index) => {
+        const blob = item.getAsFile();
+        if (!blob) return null;
+        return new File([blob], blob.name || pastedImageName(blob.type || item.type, index), {
+          type: blob.type || item.type || "image/png",
+          lastModified: Date.now(),
+        });
+      })
+      .filter((file): file is File => file !== null);
+
+    if (imageFiles.length === 0) return;
+
+    const pastedText = event.clipboardData.getData("text/plain");
+    if (!pastedText.trim()) {
+      event.preventDefault();
+    }
+    setFiles((prev) => [...prev, ...imageFiles]);
   };
 
   const removeFileAt = (index: number) => {
@@ -813,6 +850,7 @@ export function ChatInterface() {
               ref={textareaRef}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
+              onPaste={onPasteComposer}
               placeholder="Message NekoZeni…"
               className="min-h-[44px] flex-1"
               rows={2}
@@ -878,8 +916,9 @@ export function ChatInterface() {
             <div className="flex items-center gap-2">
               <Paperclip className="h-3.5 w-3.5 shrink-0" />
               <span className="leading-snug">
-                Tip: on mobile, install the PWA, then share a receipt, bill, payroll image, or PDF directly
-                into NekoZeni from your gallery or files app.
+                Tip: on phone, install NekoZeni to your home screen first. Then open Photos or Gallery, choose a
+                receipt, tap Share, and if NekoZeni is not in the first row tap More to find it. On desktop, you can
+                also paste a copied screenshot straight into the chat box.
                 {status === "authenticated" && !voice.supported ? (
                   <> {t("voice_unsupported_hint")}</>
                 ) : null}

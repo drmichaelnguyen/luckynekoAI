@@ -150,6 +150,9 @@ model Category {
   name      String
   slug      String
   kind      CategoryKind @default(expense)
+  parentId  String?
+  parent    Category?    @relation("CategoryChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children  Category[]   @relation("CategoryChildren")
   sortOrder Int          @default(0)
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
@@ -159,6 +162,7 @@ model Category {
 
   @@unique([userId, slug])
   @@index([userId])
+  @@index([userId, parentId])
 }
 
 enum FlowDirection {

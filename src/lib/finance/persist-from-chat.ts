@@ -29,6 +29,42 @@ function parseOccurredAt(iso: string | null | undefined): Date {
   return Number.isNaN(d.getTime()) ? new Date() : d;
 }
 
+function dayBounds(date: Date): { start: Date; end: Date } {
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(date);
+  end.setHours(23, 59, 59, 999);
+  return { start, end };
+}
+
+async function findDuplicateTransaction(args: {
+  db: PrismaClient;
+  userId: string;
+  amountCents: number;
+  direction: FlowDirection;
+  occurredAt: Date;
+}) {
+  const { start, end } = dayBounds(args.occurredAt);
+  return args.db.transaction.findFirst({
+    where: {
+      userId: args.userId,
+      amountCents: args.amountCents,
+      direction: args.direction,
+      occurredAt: {
+        gte: start,
+        lte: end,
+      },
+      status: { not: "rejected" },
+    },
+    select: {
+      id: true,
+      merchant: true,
+      occurredAt: true,
+      currency: true,
+    },
+  });
+}
+
 export async function persistFreeformLedgerEntry(
   db: PrismaClient,
   userId: string,
@@ -105,6 +141,20 @@ export async function persistFreeformLedgerEntry(
   const merchant = asString(transaction.merchant);
   const notes = asString(transaction.notes);
   const occurredAt = parseOccurredAt(asString(transaction.transactionDate) ?? asString(transaction.occurredAt));
+  const duplicate = await findDuplicateTransaction({
+    db,
+    userId,
+    amountCents: amountAbsCents,
+    direction,
+    occurredAt,
+  });
+  if (duplicate) {
+    return {
+      saved: false,
+      detail: `Skipped duplicate entry: there is already a ${duplicate.currency} ${(amountAbsCents / 100).toFixed(2)} transaction on ${duplicate.occurredAt.toISOString().slice(0, 10)}.`,
+      transactionId: duplicate.id,
+    };
+  }
 
   const created = await db.transaction.create({
     data: {
@@ -140,6 +190,7 @@ export async function persistTransactionListLedgerEntries(
   const transactionIds: string[] = [];
   let savedCount = 0;
   let pendingCount = 0;
+  let duplicateCount = 0;
 
   for (const [index, transaction] of transactions.entries()) {
     const rawStructuredJson = JSON.stringify({
@@ -148,7 +199,13 @@ export async function persistTransactionListLedgerEntries(
       transaction,
     });
     const persisted = await persistFreeformLedgerEntry(db, userId, transaction, rawStructuredJson);
-    if (!persisted.saved || !persisted.transactionId) continue;
+    if (!persisted.saved) {
+      if (persisted.detail.includes("Skipped duplicate entry")) {
+        duplicateCount += 1;
+      }
+      continue;
+    }
+    if (!persisted.transactionId) continue;
     savedCount += 1;
     transactionIds.push(persisted.transactionId);
     if (persisted.detail.includes("Saved as pending")) {
@@ -159,15 +216,22 @@ export async function persistTransactionListLedgerEntries(
   if (savedCount === 0) {
     return {
       saved: false,
-      detail: "I couldn't find any complete transactions to save from that screenshot.",
+      detail:
+        duplicateCount > 0
+          ? `I skipped ${duplicateCount} duplicate transaction${duplicateCount === 1 ? "" : "s"} from that screenshot, and there was nothing new to save.`
+          : "I couldn't find any complete transactions to save from that screenshot.",
       transactionIds,
     };
   }
 
+  const duplicateSuffix =
+    duplicateCount > 0
+      ? ` I skipped ${duplicateCount} duplicate transaction${duplicateCount === 1 ? "" : "s"} that matched the same date and amount already in your ledger.`
+      : "";
   const detail =
     pendingCount > 0
-      ? `Saved ${savedCount} transaction${savedCount === 1 ? "" : "s"} from the screenshot. ${pendingCount} ${pendingCount === 1 ? "needs" : "need"} confirmation in Tools → Confirm.`
-      : `Saved ${savedCount} transaction${savedCount === 1 ? "" : "s"} from the screenshot.`;
+      ? `Saved ${savedCount} transaction${savedCount === 1 ? "" : "s"} from the screenshot. ${pendingCount} ${pendingCount === 1 ? "needs" : "need"} confirmation in Tools → Confirm.${duplicateSuffix}`
+      : `Saved ${savedCount} transaction${savedCount === 1 ? "" : "s"} from the screenshot.${duplicateSuffix}`;
 
   return { saved: true, detail, transactionIds };
 }

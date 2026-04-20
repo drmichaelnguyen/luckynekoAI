@@ -44,13 +44,13 @@ const en: GuideContent = {
     {
       heading: "Share a photo from Camera or Gallery into NekoZeni",
       paragraphs: [
-        "This uses the same “Share” flow as other apps. NekoZeni must already be installed from the home screen (recommended) or open in a tab where you are signed in.",
-        "You should be logged in before sharing, so the import lands in your chat session.",
+        "This uses your phone’s normal share sheet. Install NekoZeni to the home screen first, then make sure you have opened it once and signed in.",
+        "If NekoZeni does not appear right away in the share sheet, scroll sideways, tap More, and enable it there. On some phones it may appear under your browser’s installed app targets instead of the first app row.",
       ],
       bullets: [
-        "iOS: take a photo in Camera, or open Photos → select the receipt image → Share → choose NekoZeni (or your browser’s share target that lists NekoZeni). If you don’t see it, install to Home Screen first, then try Share again.",
-        "Android: open Google Photos or your Gallery → select the image → Share → pick NekoZeni / the browser PWA. Same tip: install the PWA first if the target is missing.",
-        "After share: you’ll land in NekoZeni with the image attached to the composer and a short note in chat. Add any extra text, then tap Send so the assistant can read the receipt.",
+        "iPhone / iPad: Photos → select the receipt image → Share → look for NekoZeni. If it is not visible, swipe to the end of the app list → More → turn on NekoZeni, then try again.",
+        "Android: Google Photos or Gallery → select the image → Share → look for NekoZeni. If it is missing, install the PWA first, then check the full share sheet or browser app targets.",
+        "What happens next: NekoZeni opens with the image already attached above the message box. Add a note if you want, then tap Send to let the assistant read it.",
       ],
     },
     {
@@ -97,13 +97,13 @@ const vi: GuideContent = {
     {
       heading: "Chia sẻ ảnh từ Máy ảnh hoặc Thư viện vào NekoZeni",
       paragraphs: [
-        "Dùng luồng “Chia sẻ” giống các app khác. Nên cài NekoZeni từ màn hình chính, hoặc mở tab đã đăng nhập.",
-        "Hãy đăng nhập trước khi chia sẻ để ảnh được đưa vào đúng phiên chat của bạn.",
+        "Dùng bảng Chia sẻ của điện thoại như các app khác. Hãy cài NekoZeni ra màn hình chính trước, rồi mở app ít nhất một lần và đăng nhập.",
+        "Nếu chưa thấy NekoZeni trong bảng Chia sẻ, hãy vuốt ngang, bấm Thêm, rồi bật NekoZeni. Trên một số máy, mục này nằm trong nhóm ứng dụng của trình duyệt/PWA chứ không hiện ngay hàng đầu.",
       ],
       bullets: [
-        "iOS: chụp trong Máy ảnh, hoặc Ảnh → chọn hình → Chia sẻ → chọn NekoZeni (hoặc mục chia sẻ của trình duyệt có NekoZeni). Nếu không thấy, cài Thêm vào Màn hình chính rồi thử lại.",
-        "Android: Ảnh / Thư viện → chọn ảnh → Chia sẻ → NekoZeni / PWA trình duyệt. Cài PWA trước nếu chưa thấy mục.",
-        "Sau khi chia sẻ: bạn vào NekoZeni với ảnh đã gắn sẵn ở ô soạn tin. Thêm chữ nếu cần, rồi bấm Gửi để trợ lý đọc hóa đơn.",
+        "iPhone / iPad: Ảnh → chọn hình hóa đơn → Chia sẻ → tìm NekoZeni. Nếu chưa thấy, vuốt đến cuối danh sách app → Thêm → bật NekoZeni rồi thử lại.",
+        "Android: Google Photos / Thư viện → chọn ảnh → Chia sẻ → tìm NekoZeni. Nếu chưa có, hãy cài PWA trước rồi kiểm tra toàn bộ bảng chia sẻ hoặc nhóm app của trình duyệt.",
+        "Sau khi chia sẻ: NekoZeni sẽ mở ra với ảnh đã đính kèm sẵn phía trên ô nhập. Bạn có thể thêm ghi chú rồi bấm Gửi để trợ lý đọc hóa đơn.",
       ],
     },
     {

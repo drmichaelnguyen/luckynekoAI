@@ -84,6 +84,41 @@ function parseOccurredAt(iso: string | null | undefined): Date {
   return Number.isNaN(d.getTime()) ? new Date() : d;
 }
 
+function dayBounds(date: Date): { start: Date; end: Date } {
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(date);
+  end.setHours(23, 59, 59, 999);
+  return { start, end };
+}
+
+async function findDuplicateTransaction(args: {
+  db: PrismaClient;
+  userId: string;
+  amountCents: number;
+  direction: FlowDirection;
+  occurredAt: Date;
+}) {
+  const { start, end } = dayBounds(args.occurredAt);
+  return args.db.transaction.findFirst({
+    where: {
+      userId: args.userId,
+      amountCents: args.amountCents,
+      direction: args.direction,
+      occurredAt: {
+        gte: start,
+        lte: end,
+      },
+      status: { not: "rejected" },
+    },
+    select: {
+      id: true,
+      currency: true,
+      occurredAt: true,
+    },
+  });
+}
+
 /** Try multiple date fields in priority order; fall back to today only if all are null. */
 function resolveDate(...candidates: (string | null | undefined)[]): Date {
   for (const c of candidates) {
@@ -144,6 +179,20 @@ export async function persistReceiptLedgerEntry(
 
   const merchant = asString(receipt.merchant);
   const occurredAt = resolveDate(asString(receipt.purchaseDate), asString(receipt.date), asString(receipt.transactionDate));
+  const duplicate = await findDuplicateTransaction({
+    db,
+    userId,
+    amountCents: amountAbsCents,
+    direction: "out",
+    occurredAt,
+  });
+  if (duplicate) {
+    return {
+      saved: false,
+      detail: `Skipped duplicate receipt: there is already a ${duplicate.currency} ${(amountAbsCents / 100).toFixed(2)} expense on ${duplicate.occurredAt.toISOString().slice(0, 10)}.`,
+      transactionId: duplicate.id,
+    };
+  }
   const tax = asNumber(receipt.taxTotal, currency);
   const sub = asNumber(receipt.subtotal, currency);
   const memoParts = [
@@ -217,6 +266,20 @@ export async function persistPaystubLedgerEntry(
     asString(paystub.payPeriodEnd),
     asString(paystub.payPeriodStart),
   );
+  const duplicate = await findDuplicateTransaction({
+    db,
+    userId,
+    amountCents: amountAbsCents,
+    direction: "in",
+    occurredAt,
+  });
+  if (duplicate) {
+    return {
+      saved: false,
+      detail: `Skipped duplicate paystub: there is already a ${duplicate.currency} ${(amountAbsCents / 100).toFixed(2)} income entry on ${duplicate.occurredAt.toISOString().slice(0, 10)}.`,
+      transactionId: duplicate.id,
+    };
+  }
   const gross = asNumber(paystub.grossPay, currency);
   const memo = [
     gross != null ? `Gross: ${gross}` : null,

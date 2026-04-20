@@ -169,8 +169,16 @@ export type EditableFields = {
   categoryId: string | null;
 };
 
+export type CategoryOption = {
+  id: string;
+  name: string;
+  kind: string;
+  parentId: string | null;
+  parentName: string | null;
+};
+
 export async function getTransactionDetailAction(id: string): Promise<
-  { ok: true; tx: TransactionDetail; wallets: { id: string; name: string }[]; categories: { id: string; name: string; kind: string }[] } |
+  { ok: true; tx: TransactionDetail; wallets: { id: string; name: string }[]; categories: CategoryOption[] } |
   { ok: false; error: string }
 > {
   const session = await auth();
@@ -181,7 +189,11 @@ export async function getTransactionDetailAction(id: string): Promise<
       include: { wallet: true, category: true },
     }),
     prisma.wallet.findMany({ where: { userId: session.user.id }, orderBy: [{ isDefault: "desc" }, { sortOrder: "asc" }], select: { id: true, name: true } }),
-    prisma.category.findMany({ where: { userId: session.user.id }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }], select: { id: true, name: true, kind: true } }),
+    prisma.category.findMany({
+      where: { userId: session.user.id },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+      select: { id: true, name: true, kind: true, parentId: true, parent: { select: { name: true } } },
+    }),
   ]);
   if (!tx) return { ok: false, error: "Transaction not found." };
 
@@ -211,7 +223,13 @@ export async function getTransactionDetailAction(id: string): Promise<
       editHistory,
     },
     wallets,
-    categories,
+    categories: categories.map((c) => ({
+      id: c.id,
+      name: c.name,
+      kind: c.kind,
+      parentId: c.parentId,
+      parentName: c.parent?.name ?? null,
+    })),
   };
 }
 

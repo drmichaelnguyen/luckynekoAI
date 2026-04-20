@@ -104,14 +104,21 @@ function TransactionListReview({
   onResolved: (msg: string) => void;
   onDismiss: () => void;
 }) {
+  const [selectedIndexes, setSelectedIndexes] = useState<number[]>(() => items.map((_, index) => index));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  function toggleIndex(index: number) {
+    setSelectedIndexes((prev) =>
+      prev.includes(index) ? prev.filter((value) => value !== index) : [...prev, index].sort((a, b) => a - b),
+    );
+  }
 
   async function save() {
     setBusy(true);
     setError(null);
     try {
-      const r = await persistTransactionListAction(chatTurnId);
+      const r = await persistTransactionListAction(chatTurnId, selectedIndexes);
       if (r.ok) {
         onResolved(r.message);
         onDismiss();
@@ -126,11 +133,18 @@ function TransactionListReview({
   return (
     <div className="space-y-2">
       <p className="text-xs font-medium text-amber-950 dark:text-amber-50">
-        Apple Pay / wallet screenshot detected — review the transactions below, then log them all:
+        Apple Pay / wallet screenshot detected — which transactions from this scan should be added?
       </p>
       <div className="space-y-1.5">
         {items.map((item, i) => (
-          <div key={i} className="rounded-lg border bg-white/60 px-2 py-1.5 text-xs dark:bg-background/40">
+          <label key={i} className="flex items-start gap-2 rounded-lg border bg-white/60 px-2 py-1.5 text-xs dark:bg-background/40">
+            <input
+              type="checkbox"
+              checked={selectedIndexes.includes(i)}
+              onChange={() => toggleIndex(i)}
+              className="mt-0.5 h-3.5 w-3.5"
+            />
+            <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2">
               <span className="truncate font-medium text-foreground">{item.merchant ?? "Unknown merchant"}</span>
               <span className="shrink-0 text-foreground">
@@ -140,14 +154,15 @@ function TransactionListReview({
             <div className="mt-0.5 text-[11px] text-muted-foreground">
               {[item.transactionDate, item.category, item.notes].filter(Boolean).join(" · ") || "Pending details from screenshot"}
             </div>
-          </div>
+            </div>
+          </label>
         ))}
       </div>
       {error && <p className="text-xs text-destructive">{error}</p>}
       <div className="flex flex-wrap gap-2 pt-1">
         <Button type="button" size="sm" className="h-8 gap-1.5 text-xs" disabled={busy} onClick={() => void save()}>
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-          Log all
+          Add selected
         </Button>
         <Button type="button" size="sm" variant="ghost" className="h-8 text-xs" disabled={busy} onClick={onDismiss}>
           Later

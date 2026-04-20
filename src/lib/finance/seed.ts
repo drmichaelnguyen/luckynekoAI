@@ -45,33 +45,67 @@ const DEFAULT_WALLET_NAMES = ["Main", "Savings", "Credit card"] as const;
 
 const DEFAULT_WALLET_KINDS: WalletKind[] = ["spending", "savings", "credit"];
 
-const DEFAULT_CATEGORIES: Array<{ name: string; kind: "income" | "expense" | "transfer" }> = [
-  { name: "Income", kind: "income" },
-  { name: "Housing", kind: "expense" },
-  { name: "Utilities", kind: "expense" },
-  { name: "Groceries", kind: "expense" },
-  { name: "Dining", kind: "expense" },
-  { name: "Transport", kind: "expense" },
-  { name: "Shopping", kind: "expense" },
-  { name: "Health", kind: "expense" },
-  { name: "Entertainment", kind: "expense" },
-  { name: "Bills & loans", kind: "expense" },
-  { name: "Transfers", kind: "transfer" },
-  { name: "Other", kind: "expense" },
+const DEFAULT_CATEGORY_TREE: Array<{
+  name: string;
+  kind: "income" | "expense" | "transfer";
+  children?: string[];
+}> = [
+  { name: "Income", kind: "income", children: ["Salary", "Bonus", "Refund", "Interest", "Other income"] },
+  { name: "Housing", kind: "expense", children: ["Rent", "Mortgage", "Maintenance", "Furniture"] },
+  { name: "Utilities", kind: "expense", children: ["Electricity", "Water", "Internet", "Phone"] },
+  { name: "Groceries", kind: "expense", children: ["Supermarket", "Convenience store", "Specialty food"] },
+  { name: "Dining", kind: "expense", children: ["Restaurant", "Cafe", "Delivery", "Takeout"] },
+  { name: "Transportation", kind: "expense", children: ["Flight", "Gas", "Bus", "Train", "Taxi", "Parking", "Tolls"] },
+  { name: "Shopping", kind: "expense", children: ["Clothing", "Electronics", "Home goods", "Gifts"] },
+  { name: "Health", kind: "expense", children: ["Pharmacy", "Doctor", "Dental", "Fitness"] },
+  { name: "Entertainment", kind: "expense", children: ["Movies", "Music", "Games", "Events"] },
+  { name: "Bills & loans", kind: "expense", children: ["Insurance", "Loan payment", "Credit card", "Subscriptions"] },
+  { name: "Transfers", kind: "transfer", children: ["Savings transfer", "Credit card payment", "Internal transfer"] },
+  { name: "Other", kind: "expense", children: ["Miscellaneous"] },
 ];
 
 export async function ensureCategorySeed(db: PrismaClient, userId: string): Promise<void> {
-  const catCount = await db.category.count({ where: { userId } });
-  if (catCount > 0) return;
-  await db.category.createMany({
-    data: DEFAULT_CATEGORIES.map((c, i) => ({
-      userId,
-      name: c.name,
-      slug: slugify(c.name),
-      kind: c.kind,
-      sortOrder: i,
-    })),
+  const existing = await db.category.findMany({
+    where: { userId },
+    select: { id: true, slug: true, name: true, parentId: true },
   });
+  const bySlug = new Map(existing.map((category) => [category.slug, category]));
+
+  let sortOrder = 0;
+  for (const group of DEFAULT_CATEGORY_TREE) {
+    const parentSlug = slugify(group.name);
+    let parent = bySlug.get(parentSlug);
+    if (!parent) {
+      parent = await db.category.create({
+        data: {
+          userId,
+          name: group.name,
+          slug: parentSlug,
+          kind: group.kind,
+          sortOrder: sortOrder++,
+        },
+        select: { id: true, slug: true, name: true, parentId: true },
+      });
+      bySlug.set(parent.slug, parent);
+    }
+
+    for (const childName of group.children ?? []) {
+      const childSlug = slugify(`${group.name}-${childName}`);
+      if (bySlug.has(childSlug)) continue;
+      const child = await db.category.create({
+        data: {
+          userId,
+          name: childName,
+          slug: childSlug,
+          kind: group.kind,
+          parentId: parent.id,
+          sortOrder: sortOrder++,
+        },
+        select: { id: true, slug: true, name: true, parentId: true },
+      });
+      bySlug.set(child.slug, child);
+    }
+  }
 }
 
 function walletKindsForCount(n: number): WalletKind[] {
@@ -144,7 +178,7 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
       db.category.findMany({
         where: { userId },
         orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-        select: { name: true, kind: true, slug: true },
+        select: { name: true, kind: true, slug: true, parent: { select: { name: true } } },
       }),
       loadFinancialPlansForContext(db, userId),
       db.transaction.groupBy({
@@ -193,7 +227,10 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
         netCents != null ? ` balance:${(netCents / 100).toFixed(2)} ${w.currency}` : "";
       return `- ${w.name} (${w.kind}, ${w.currency}${w.isDefault ? ", default" : ""}${balStr}) [id:${w.id.slice(0, 8)}…]`;
     });
-    const cLines = categories.map((c) => `- ${c.name} (${c.kind}, slug:${c.slug})`);
+    const cLines = categories.map((c) => {
+      const label = c.parent?.name ? `${c.parent.name} > ${c.name}` : c.name;
+      return `- ${label} (${c.kind}, slug:${c.slug})`;
+    });
     return [
       ...prefLines,
       "",

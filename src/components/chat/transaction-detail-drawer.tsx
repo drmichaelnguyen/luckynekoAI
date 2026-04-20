@@ -32,7 +32,7 @@ export function TransactionDetailDrawer({
   const [data, setData] = useState<{
     tx: TransactionDetail;
     wallets: { id: string; name: string }[];
-    categories: { id: string; name: string; kind: string }[];
+    categories: { id: string; name: string; kind: string; parentId: string | null; parentName: string | null }[];
   } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, startLoad] = useTransition();
@@ -106,6 +106,15 @@ export function TransactionDetailDrawer({
   }
 
   if (!transactionId) return null;
+
+  const categoryGroups = data
+    ? data.categories.reduce<Record<string, typeof data.categories>>((acc, category) => {
+        const key = category.parentName ?? "Top level";
+        if (!acc[key]) acc[key] = [];
+        acc[key].push(category);
+        return acc;
+      }, {})
+    : {};
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal="true">
@@ -236,8 +245,14 @@ export function TransactionDetailDrawer({
                       className="h-8 w-full rounded-md border bg-background px-2 text-sm"
                     >
                       <option value="">— none —</option>
-                      {data.categories.map((c) => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
+                      {Object.entries(categoryGroups).map(([group, categories]) => (
+                        <optgroup key={group} label={group}>
+                          {categories.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.parentName ? c.name : `${c.name} (major)`}
+                            </option>
+                          ))}
+                        </optgroup>
                       ))}
                     </select>
                   </label>
