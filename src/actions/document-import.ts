@@ -4,9 +4,11 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { z } from "zod";
 
 import { auth } from "@/auth";
+import { findOrCreateCategory } from "@/lib/finance/category-resolver";
 import { persistTransactionListLedgerEntries } from "@/lib/finance/persist-from-chat";
 import { persistPaystubLedgerEntry, persistReceiptLedgerEntry } from "@/lib/finance/persist-receipt-paystub";
 import type { PendingImportPayloadV1, PendingImportPayloadV2 } from "@/lib/document-import/pending-import-shared";
+import { loadSpendingPatterns, applyMerchantCategoryRule } from "@/lib/learning/spending-patterns";
 import { prisma } from "@/lib/prisma";
 
 const PendingPayloadSchema = z.union([
@@ -184,6 +186,14 @@ export async function resolveDocumentImportAction(formData: FormData): Promise<R
     }
   }
 
+  // Apply learned merchant-category rules before persisting
+  try {
+    const patterns = await loadSpendingPatterns(prisma, session.user.id);
+    finalStructured = applyMerchantCategoryRule(finalStructured, patterns.merchantHints);
+  } catch {
+    // learning rules are best-effort; continue if they fail
+  }
+
   const rawStructuredJson = JSON.stringify({
     documentKind: pending.documentKind,
     ...(pending.documentKind === "receipt" ? { receipt: finalStructured } : { paystub: finalStructured }),
@@ -230,22 +240,23 @@ export async function persistReceiptSplitAction(
   const session = await auth();
   if (!session?.user?.id) return { ok: false, message: "Unauthorized" };
 
-  const [wallets, categories] = await Promise.all([
-    prisma.wallet.findMany({
-      where: { userId: session.user.id },
-      orderBy: [{ isDefault: "desc" }, { sortOrder: "asc" }],
-    }),
-    prisma.category.findMany({ where: { userId: session.user.id } }),
-  ]);
+  const wallets = await prisma.wallet.findMany({
+    where: { userId: session.user.id },
+    orderBy: [{ isDefault: "desc" }, { sortOrder: "asc" }],
+  });
   const wallet = wallets.find((w) => w.isDefault) ?? wallets[0];
   if (!wallet) return { ok: false, message: "No wallet configured." };
 
   const saved: string[] = [];
   for (const item of items) {
     if (!item.amount || item.amount <= 0) continue;
-    const cat = categories.find(
-      (c) => c.name.toLowerCase() === item.category.toLowerCase() || c.slug === item.category.toLowerCase(),
-    ) ?? categories.find((c) => c.slug === "other");
+    const cat = await findOrCreateCategory({
+      db: prisma,
+      userId: session.user.id,
+      label: item.category,
+      direction: item.direction,
+      fallbackSlug: item.direction === "in" ? "income" : "other",
+    });
     await prisma.transaction.create({
       data: {
         userId: session.user.id,

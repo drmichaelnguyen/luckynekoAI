@@ -8,6 +8,14 @@ import { PENDING_IMPORT_VERSION } from "@/lib/document-import/pending-import-sha
 import { auth } from "@/auth";
 import { persistFreeformLedgerEntry } from "@/lib/finance/persist-from-chat";
 import { financeContextLines } from "@/lib/finance/seed";
+import {
+  detectLanguageFromMessage,
+  detectVerbositySignal,
+  detectExplicitPreference,
+  loadChatPreferences,
+  saveChatPreferences,
+  mergePreferences,
+} from "@/lib/learning/chat-preferences";
 import { maybeCompressImageForStorage } from "@/lib/media/compress-image-for-storage";
 import {
   assertAllowedChatMime,
@@ -149,7 +157,7 @@ Transaction object fields (use null for unknown):
 - amount: number | null (major currency units, positive for magnitude; use direction for sign semantics)
 - currency: string | null (default CAD when implied)
 - merchant: string | null
-- category: string | null (must align with a CATEGORY name from the USER LEDGER CONTEXT appended to the user message)
+- category: string | null (prefer an existing CATEGORY name from the USER LEDGER CONTEXT; if nothing fits well, you may propose a new category or a subcategory path like "Dining > Sushi")
 - transactionDate: string | null (ISO yyyy-mm-dd if possible)
 - notes: string | null
 - walletLabel: string | null (must match a WALLET name from USER LEDGER CONTEXT; if unsure use "Main")
@@ -166,13 +174,13 @@ transactionList rules for Apple Pay / wallet screenshots:
 - amount should be positive magnitude; use direction for sign semantics.
 - For Apple Pay / wallet activity screenshots, direction is usually "out" unless the screenshot clearly shows a refund or incoming transfer.
 - Use today’s year when the screenshot only shows relative timing like "44 minutes ago" or "Yesterday"; convert "Yesterday" to the actual ISO date relative to TODAY'S DATE.
-- If category is unclear, choose the closest category from USER LEDGER CONTEXT or use "Other".
+- If category is unclear, choose the closest category from USER LEDGER CONTEXT or use "Other". If the best fit is missing, you may propose a new category or a "Parent > Child" subcategory path.
 - If fewer than 1 complete transaction row is legible, do not use transaction_list_capture.
 
 Bookkeeping rules for freeform_transaction:
 - When the user describes everyday shopping, use recurrence "one_time" and needsUserConfirm false unless unclear.
 - For rent, mortgage, car loan, BNPL, phone plan, streaming, insurance, or utilities, prefer recurrence "recurrent" or "unknown" with needsUserConfirm true and a friendly userConfirmReason.
-- Always pick the closest category from the provided list; if none fit, use "Other".
+- Always pick the closest category from the provided list when it fits. If none fit, you may propose a new category or a "Parent > Child" subcategory path instead of forcing "Other".
 
 Receipt object fields (use null for unknown):
 - total: number | null
@@ -318,6 +326,22 @@ function buildUserPrompt(input: {
   lines.push("");
   lines.push("Return ONLY valid JSON matching the schema described in your system instructions.");
   return lines.join("\n");
+}
+
+async function detectAndSaveChatPreferences(
+  db: typeof prisma,
+  userId: string,
+  userMessage: string,
+  assistantMessage: string,
+): Promise<void> {
+  const language = detectLanguageFromMessage(userMessage);
+  const verbosity = detectVerbositySignal(userMessage, assistantMessage);
+  const explicit = detectExplicitPreference(userMessage);
+  if (!language && !verbosity && !explicit) return;
+
+  const current = await loadChatPreferences(db, userId);
+  const merged = mergePreferences(current, { language, verbosity, explicitInstruction: explicit });
+  if (merged) await saveChatPreferences(db, userId, merged);
 }
 
 export async function handleChatInput(formData: FormData) {
@@ -779,6 +803,9 @@ export async function handleChatInput(formData: FormData) {
         /* best-effort — chat reply still returns */
       }
     }
+
+    // Best-effort chat style learning — never blocks response
+    detectAndSaveChatPreferences(prisma, userId, message, assistantMessage).catch(() => {});
 
     return {
       ok: true as const,

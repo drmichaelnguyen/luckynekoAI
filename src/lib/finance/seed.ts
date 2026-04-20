@@ -3,6 +3,9 @@ import type { PlanKind, PlanPeriod, PrismaClient, WalletKind } from "@prisma/cli
 import { buildExchangeRateContext } from "@/lib/finance/exchange-rates";
 import { slugify } from "@/lib/finance/slug";
 import { findUserNameAndNicknameById } from "@/lib/prisma/user-select-compat";
+import { loadSpendingPatterns, buildSpendingPatternLines } from "@/lib/learning/spending-patterns";
+import { loadCorrectionExamples, buildCorrectionExamplesLines } from "@/lib/learning/correction-examples";
+import { loadChatPreferences } from "@/lib/learning/chat-preferences";
 
 /** Shape used when building chat finance context (keeps us typed if Prisma client is stale). */
 type FinancialPlanContextRow = {
@@ -168,7 +171,7 @@ export async function ensureFinanceSeed(db: PrismaClient, userId: string): Promi
 export async function financeContextLines(db: PrismaClient, userId: string): Promise<string> {
   try {
     await ensureFinanceSeed(db, userId);
-    const [user, wallets, categories, plans, balanceGroups, userPrefs] = await Promise.all([
+    const [user, wallets, categories, plans, balanceGroups, userPrefs, spendingCtx, correctionExamples, chatPrefs] = await Promise.all([
       findUserNameAndNicknameById(db, userId),
       db.wallet.findMany({
         where: { userId },
@@ -187,6 +190,9 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
         _sum: { amountCents: true },
       }).catch(() => [] as { walletId: string; direction: string; _sum: { amountCents: number | null } }[]),
       db.user.findUnique({ where: { id: userId }, select: { preferredCurrency: true } }),
+      loadSpendingPatterns(db, userId),
+      loadCorrectionExamples(db, userId, 3),
+      loadChatPreferences(db, userId),
     ]);
 
     const preferredCurrency = (userPrefs?.preferredCurrency ?? "CAD").toUpperCase();
@@ -206,6 +212,24 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
       `- Display name on file: ${user?.name ?? "(not set)"}`,
       `- Preferred currency: ${preferredCurrency}`,
     ];
+
+    // Add chat preferences if detected
+    if (chatPrefs?.language === "vi") {
+      prefLines.push(`- Language: Vietnamese — respond in Vietnamese unless user writes English first.`);
+    } else if (chatPrefs?.language === "en") {
+      prefLines.push(`- Language: English — respond in English.`);
+    }
+    if (chatPrefs?.verbosity === "concise") {
+      prefLines.push(`- Response style: concise — keep replies short and direct.`);
+    } else if (chatPrefs?.verbosity === "detailed") {
+      prefLines.push(`- Response style: detailed — explain thoroughly.`);
+    }
+    if ((chatPrefs?.explicitInstructions?.length ?? 0) > 0) {
+      prefLines.push(`- User-stated preferences:`);
+      for (const inst of chatPrefs!.explicitInstructions) {
+        prefLines.push(`  - "${inst}"`);
+      }
+    }
 
     const planLines =
       plans.length === 0
@@ -231,10 +255,14 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
       const label = c.parent?.name ? `${c.parent.name} > ${c.name}` : c.name;
       return `- ${label} (${c.kind}, slug:${c.slug})`;
     });
+
+    const spendingLines = buildSpendingPatternLines(spendingCtx);
+    const correctionLines = buildCorrectionExamplesLines(correctionExamples);
+
     return [
       ...prefLines,
       "",
-      "USER LEDGER CONTEXT (use wallet NAME and category NAME from lists; never invent wallet names).",
+      "USER LEDGER CONTEXT (use wallet NAME from the list; never invent wallet names. Prefer category NAMEs from the list, but you may propose a new category or a Parent > Child subcategory path if nothing fits well).",
       "WALLETS:",
       ...wLines,
       "CATEGORIES:",
@@ -242,6 +270,8 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
       "",
       ...planLines,
       "",
+      ...(spendingLines.length > 0 ? [...spendingLines, ""] : []),
+      ...(correctionLines.length > 0 ? [...correctionLines, ""] : []),
       ...(fxContext ? [fxContext] : []),
     ].join("\n");
   } catch (e) {

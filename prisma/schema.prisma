@@ -22,6 +22,8 @@ model User {
   onboardingCompleted Boolean @default(true)
   /// Primary reporting currency for wallets & chat context.
   preferredCurrency   String  @default("CAD")
+  /// JSON blob storing learned chat style preferences: language, verbosity, explicit instructions.
+  chatPreferencesJson String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
