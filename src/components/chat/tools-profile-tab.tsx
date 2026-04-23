@@ -79,6 +79,7 @@ export function ToolsProfileTab({ active }: { active: boolean }) {
         <div className="mt-3 flex items-center gap-4">
           <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-full border bg-muted">
             {hasAvatar ? (
+              // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={`/api/user/avatar?n=${avatarNonce}`}
                 alt=""

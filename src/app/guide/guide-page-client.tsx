@@ -71,11 +71,11 @@ const STEPS: Step[] = [
       <div className="space-y-3 text-sm text-foreground/90">
         <p>The main screen is a chat. Type what you bought — or paste a receipt — and NekoZeni logs it for you.</p>
         <ul className="space-y-2">
-          <Check>Type: <span className="font-medium">"Coffee at Tim Hortons $3.50 today"</span></Check>
+          <Check>Type: <span className="font-medium">&ldquo;Coffee at Tim Hortons $3.50 today&rdquo;</span></Check>
           <Check>Or just paste a screenshot of your receipt</Check>
           <Check>NekoZeni replies with a summary and saves it to your ledger</Check>
         </ul>
-        <Tip>You don't need to use a special format — natural language works best.</Tip>
+        <Tip>You don&apos;t need to use a special format &mdash; natural language works best.</Tip>
       </div>
     ),
   },
@@ -166,11 +166,11 @@ const STEPS: Step[] = [
       <div className="space-y-3 text-sm text-foreground/90">
         <p>NekoZeni is a Progressive Web App — install it from your browser for a full native-app experience:</p>
         <ul className="space-y-2">
-          <Check><strong>iPhone/iPad (Safari):</strong> tap Share → "Add to Home Screen" → Add</Check>
-          <Check><strong>Android (Chrome):</strong> menu (⋮) → "Install app" or "Add to Home Screen"</Check>
+          <Check><strong>iPhone/iPad (Safari):</strong> tap Share &rarr; &ldquo;Add to Home Screen&rdquo; &rarr; Add</Check>
+          <Check><strong>Android (Chrome):</strong> menu (&#8942;) &rarr; &ldquo;Install app&rdquo; or &ldquo;Add to Home Screen&rdquo;</Check>
           <Check>Once installed, open from your home screen for full-screen mode</Check>
         </ul>
-        <Tip>Install the PWA first, then use your phone's Share sheet to send receipts directly from Photos or Gallery into NekoZeni.</Tip>
+        <Tip>Install the PWA first, then use your phone&apos;s Share sheet to send receipts directly from Photos or Gallery into NekoZeni.</Tip>
       </div>
     ),
   },
@@ -188,7 +188,7 @@ const STEPS: Step[] = [
           <Check><strong>Android:</strong> Gallery → select image → Share → find NekoZeni</Check>
           <Check>NekoZeni opens with the image already attached — add a note and hit Send</Check>
         </ul>
-        <Tip>If NekoZeni doesn't appear in the share sheet, open it once and sign in, then check again.</Tip>
+        <Tip>If NekoZeni doesn&apos;t appear in the share sheet, open it once and sign in, then check again.</Tip>
       </div>
     ),
   },

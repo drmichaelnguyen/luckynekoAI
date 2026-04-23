@@ -592,6 +592,7 @@ export function ChatInterface() {
               className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary/10 ring-2 ring-primary/30 transition hover:ring-primary/60 focus-visible:outline-none focus-visible:ring-primary"
             >
               {status === "authenticated" && session?.user?.image ? (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={session.user.image}
                   alt={session.user.name ?? "User avatar"}
