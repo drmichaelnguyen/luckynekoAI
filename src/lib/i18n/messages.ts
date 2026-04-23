@@ -69,7 +69,32 @@ export type MessageKey =
   | "voice_processing"
   | "voice_speaking"
   | "voice_unsupported_hint"
-  | "voice_blocked_attachments";
+  | "voice_blocked_attachments"
+  | "onboarding_step_welcome"
+  | "onboarding_step_wallets"
+  | "onboarding_step_currency"
+  | "onboarding_step_done"
+  | "onboarding_welcome_title"
+  | "onboarding_welcome_body"
+  | "onboarding_welcome_start"
+  | "onboarding_wallets_title"
+  | "onboarding_wallets_subtitle"
+  | "onboarding_wallets_recommended"
+  | "onboarding_wallets_recommended_desc"
+  | "onboarding_wallets_custom"
+  | "onboarding_wallets_custom_desc"
+  | "onboarding_wallets_count_label"
+  | "onboarding_wallets_names_label"
+  | "onboarding_currency_title"
+  | "onboarding_currency_subtitle"
+  | "onboarding_done_title"
+  | "onboarding_done_summary_wallets"
+  | "onboarding_done_summary_currency"
+  | "onboarding_done_summary_hint"
+  | "onboarding_done_submit"
+  | "onboarding_done_submit_pending"
+  | "onboarding_back"
+  | "onboarding_next";
 
 const en: Record<MessageKey, string> = {
   lang_en: "English",
@@ -143,6 +168,31 @@ const en: Record<MessageKey, string> = {
   voice_speaking: "NekoZeni is speaking…",
   voice_unsupported_hint: "Voice needs Chrome or Safari (HTTPS).",
   voice_blocked_attachments: "Remove uploads to use voice.",
+  onboarding_step_welcome: "Welcome",
+  onboarding_step_wallets: "Wallets",
+  onboarding_step_currency: "Currency",
+  onboarding_step_done: "Done",
+  onboarding_welcome_title: "Hi, I'm NekoZeni",
+  onboarding_welcome_body: "In 4 quick steps, I'll ask about your wallets and currency. Your data stays private, and the chat interface stays super simple.",
+  onboarding_welcome_start: "Get Started",
+  onboarding_wallets_title: "How many wallets?",
+  onboarding_wallets_subtitle: "Each wallet is a 'bucket' of money (daily spending, savings, credit cards...). Chat will log transactions to the wallet you choose.",
+  onboarding_wallets_recommended: "Recommended: 3 Wallets",
+  onboarding_wallets_recommended_desc: "Main · Savings · Credit card — fits most people.",
+  onboarding_wallets_custom: "Custom: 1–5 Wallets",
+  onboarding_wallets_custom_desc: "Name them based on your habits (e.g., Cash, Revolut, etc.).",
+  onboarding_wallets_count_label: "Number of wallets",
+  onboarding_wallets_names_label: "Wallet names",
+  onboarding_currency_title: "Primary Currency",
+  onboarding_currency_subtitle: "Used for balances and chat suggestions. You can still log foreign currency later; this is your 'default' for reports.",
+  onboarding_done_title: "All set!",
+  onboarding_done_summary_wallets: "Wallets:",
+  onboarding_done_summary_currency: "Currency:",
+  onboarding_done_summary_hint: "Standard categories have been created; you can customize them later in Tools.",
+  onboarding_done_submit: "Enter chat with NekoZeni",
+  onboarding_done_submit_pending: "Saving...",
+  onboarding_back: "Back",
+  onboarding_next: "Next",
 };
 
 const vi: Record<MessageKey, string> = {
@@ -216,6 +266,31 @@ const vi: Record<MessageKey, string> = {
   voice_speaking: "NekoZeni đang nói…",
   voice_unsupported_hint: "Giọng nói cần Chrome hoặc Safari (HTTPS).",
   voice_blocked_attachments: "Gỡ tệp đính kèm để dùng giọng nói.",
+  onboarding_step_welcome: "Chào",
+  onboarding_step_wallets: "Ví",
+  onboarding_step_currency: "Tiền tệ",
+  onboarding_step_done: "Xong",
+  onboarding_welcome_title: "Chào bạn, mình là NekoZeni",
+  onboarding_welcome_body: "Dưới 4 bước, mình hỏi vài thứ nhỏ: bạn dùng mấy ví, tên ví, loại tiền chính — phía sau dữ liệu vẫn được phân loại gọn; giao diện chat vẫn siêu đơn giản.",
+  onboarding_welcome_start: "Bắt đầu",
+  onboarding_wallets_title: "Bạn muốn mấy ví?",
+  onboarding_wallets_subtitle: "Mỗi ví là một 'ngăn' tiền (chi tiêu hằng ngày, tiết kiệm, thẻ…). Chat sau này sẽ ghi đúng ví bạn chọn.",
+  onboarding_wallets_recommended: "Gợi ý 3 ví",
+  onboarding_wallets_recommended_desc: "Main · Savings · Credit card — phù hợp đa số.",
+  onboarding_wallets_custom: "Tự chọn 1–5 ví",
+  onboarding_wallets_custom_desc: "Đặt tên theo thói quen của bạn (vd. Tiền mặt, Momo, v.v.).",
+  onboarding_wallets_count_label: "Số ví",
+  onboarding_wallets_names_label: "Tên từng ví",
+  onboarding_currency_title: "Tiền tệ chính",
+  onboarding_currency_subtitle: "Dùng để hiển thị số dư & gợi ý từ chat. Bạn vẫn có thể ghi chi tiêu ngoại tệ sau; đây là 'mặc định' báo cáo.",
+  onboarding_done_title: "Xong rồi!",
+  onboarding_done_summary_wallets: "Ví:",
+  onboarding_done_summary_currency: "Tiền tệ:",
+  onboarding_done_summary_hint: "Danh mục chi tiêu chuẩn đã được tạo sẵn; bạn có thể chỉnh thêm trong Tools sau.",
+  onboarding_done_submit: "Vào chat với NekoZeni",
+  onboarding_done_submit_pending: "Đang lưu…",
+  onboarding_back: "Quay lại",
+  onboarding_next: "Tiếp",
 };
 
 export const messages: Record<Locale, Record<MessageKey, string>> = { en, vi };

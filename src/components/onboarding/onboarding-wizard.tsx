@@ -9,6 +9,7 @@ import { completeOnboardingAction, type OnboardingState } from "@/actions/onboar
 import { LuckyNekoMascot } from "@/components/mascot/lucky-neko";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useLocale } from "@/contexts/locale-context";
 import { cn } from "@/lib/utils";
 
 const CURRENCIES = ["CAD", "USD", "EUR", "GBP", "VND"] as const;
@@ -17,50 +18,59 @@ const RECOMMENDED = ["Main", "Savings", "Credit card"] as const;
 
 function SubmitOnboardingButton() {
   const { pending } = useFormStatus();
+  const { t } = useLocale();
   return (
     <Button type="submit" className="w-full" size="lg" disabled={pending}>
       {pending ? (
         <>
           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          Đang lưu…
+          {t("onboarding_done_submit_pending")}
         </>
       ) : (
-        "Vào chat với NekoZeni"
+        t("onboarding_done_submit")
       )}
     </Button>
   );
 }
 
 export function OnboardingWizard() {
+  const { t } = useLocale();
   const [step, setStep] = useState(0);
   const [mode, setMode] = useState<"recommended" | "custom" | null>(null);
   const [count, setCount] = useState(3);
-  const [names, setNames] = useState<string[]>(() => ["Ví chính", "Tiết kiệm", "Chi tiêu phụ"]);
+  const [names, setNames] = useState<string[]>(() => ["Main", "Savings", "Spending"]);
   const [currency, setCurrency] = useState<(typeof CURRENCIES)[number]>("CAD");
   const [state, formAction] = useActionState(completeOnboardingAction, { error: null } satisfies OnboardingState);
 
   const syncNamesToCount = useCallback((n: number) => {
     setNames((prev) => {
       const next = [...prev];
-      while (next.length < n) next.push(`Ví ${next.length + 1}`);
+      while (next.length < n) next.push(`Wallet ${next.length + 1}`);
       return next.slice(0, n);
     });
   }, []);
 
   const walletPayload = useMemo(() => {
     if (mode === "recommended") return [...RECOMMENDED];
-    if (mode === "custom") return names.slice(0, count).map((s) => s.trim() || "Ví");
+    if (mode === "custom") return names.slice(0, count).map((s) => s.trim() || "Wallet");
     return [];
   }, [mode, names, count]);
 
   const canAdvanceFromWallet =
     mode === "recommended" || (mode === "custom" && names.slice(0, count).every((n) => n.trim().length > 0));
 
+  const labels = [
+    t("onboarding_step_welcome"),
+    t("onboarding_step_wallets"),
+    t("onboarding_step_currency"),
+    t("onboarding_step_done"),
+  ];
+
   return (
     <div className="flex min-h-dvh flex-col bg-gradient-to-b from-amber-50/90 to-background dark:from-amber-950/25">
       <div className="mx-auto flex w-full max-w-md flex-1 flex-col px-4 py-8">
         <div className="mb-6 flex items-center gap-2">
-          {["Chào", "Ví", "Tiền tệ", "Xong"].map((label, i) => (
+          {labels.map((label, i) => (
             <div key={label} className="flex flex-1 items-center gap-1">
               <div
                 className={cn(
@@ -87,13 +97,10 @@ export function OnboardingWizard() {
               <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-2xl bg-amber-50 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:ring-amber-800/60">
                 <LuckyNekoMascot variant="hero" celebrateOnMount />
               </div>
-              <h1 className="text-2xl font-semibold tracking-tight">Chào bạn, mình là NekoZeni</h1>
-              <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
-                Dưới <strong>4 bước</strong>, mình hỏi vài thứ nhỏ: bạn dùng mấy ví, tên ví, loại tiền chính — phía sau
-                dữ liệu vẫn được phân loại gọn; giao diện chat vẫn siêu đơn giản.
-              </p>
+              <h1 className="text-2xl font-semibold tracking-tight">{t("onboarding_welcome_title")}</h1>
+              <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{t("onboarding_welcome_body")}</p>
               <Button className="mt-8 w-full" size="lg" onClick={() => setStep(1)}>
-                Bắt đầu
+                {t("onboarding_welcome_start")}
                 <ChevronRight className="ml-1 h-4 w-4" />
               </Button>
             </motion.div>
@@ -107,11 +114,8 @@ export function OnboardingWizard() {
               exit={{ opacity: 0, x: -12 }}
               className="flex flex-1 flex-col gap-4"
             >
-              <h2 className="text-lg font-semibold">Bạn muốn mấy ví?</h2>
-              <p className="text-sm text-muted-foreground">
-                Mỗi ví là một &quot;ngăn&quot; tiền (chi tiêu hằng ngày, tiết kiệm, thẻ…). Chat sau này sẽ ghi đúng ví
-                bạn chọn.
-              </p>
+              <h2 className="text-lg font-semibold">{t("onboarding_wallets_title")}</h2>
+              <p className="text-sm text-muted-foreground">{t("onboarding_wallets_subtitle")}</p>
               <div className="grid gap-3">
                 <button
                   type="button"
@@ -124,8 +128,8 @@ export function OnboardingWizard() {
                     mode === "recommended" ? "border-primary bg-primary/5 ring-1 ring-primary/30" : "hover:bg-muted/50",
                   )}
                 >
-                  <div className="font-medium">Gợi ý 3 ví</div>
-                  <div className="mt-1 text-muted-foreground">Main · Savings · Credit card — phù hợp đa số.</div>
+                  <div className="font-medium">{t("onboarding_wallets_recommended")}</div>
+                  <div className="mt-1 text-muted-foreground">{t("onboarding_wallets_recommended_desc")}</div>
                 </button>
                 <button
                   type="button"
@@ -138,14 +142,14 @@ export function OnboardingWizard() {
                     mode === "custom" ? "border-primary bg-primary/5 ring-1 ring-primary/30" : "hover:bg-muted/50",
                   )}
                 >
-                  <div className="font-medium">Tự chọn 1–5 ví</div>
-                  <div className="mt-1 text-muted-foreground">Đặt tên theo thói quen của bạn (vd. Tiền mặt, Momo, v.v.).</div>
+                  <div className="font-medium">{t("onboarding_wallets_custom")}</div>
+                  <div className="mt-1 text-muted-foreground">{t("onboarding_wallets_custom_desc")}</div>
                 </button>
               </div>
 
               {mode === "custom" ? (
                 <div className="space-y-3 rounded-xl border bg-card p-4">
-                  <div className="text-xs font-medium text-muted-foreground">Số ví</div>
+                  <div className="text-xs font-medium text-muted-foreground">{t("onboarding_wallets_count_label")}</div>
                   <div className="flex flex-wrap gap-2">
                     {[1, 2, 3, 4, 5].map((n) => (
                       <Button
@@ -163,7 +167,7 @@ export function OnboardingWizard() {
                     ))}
                   </div>
                   <div className="space-y-2 pt-2">
-                    <div className="text-xs font-medium text-muted-foreground">Tên từng ví</div>
+                    <div className="text-xs font-medium text-muted-foreground">{t("onboarding_wallets_names_label")}</div>
                     {names.slice(0, count).map((val, idx) => (
                       <Input
                         key={idx}
@@ -176,7 +180,7 @@ export function OnboardingWizard() {
                             return cp;
                           });
                         }}
-                        placeholder={`Ví ${idx + 1}`}
+                        placeholder={`Wallet ${idx + 1}`}
                       />
                     ))}
                   </div>
@@ -185,7 +189,7 @@ export function OnboardingWizard() {
 
               <div className="mt-auto flex gap-2 pt-4">
                 <Button type="button" variant="outline" className="flex-1" onClick={() => setStep(0)}>
-                  Quay lại
+                  {t("onboarding_back")}
                 </Button>
                 <Button
                   type="button"
@@ -193,7 +197,7 @@ export function OnboardingWizard() {
                   disabled={!mode || !canAdvanceFromWallet}
                   onClick={() => setStep(2)}
                 >
-                  Tiếp
+                  {t("onboarding_next")}
                 </Button>
               </div>
             </motion.div>
@@ -207,11 +211,8 @@ export function OnboardingWizard() {
               exit={{ opacity: 0, x: -12 }}
               className="flex flex-1 flex-col gap-4"
             >
-              <h2 className="text-lg font-semibold">Tiền tệ chính</h2>
-              <p className="text-sm text-muted-foreground">
-                Dùng để hiển thị số dư & gợi ý từ chat. Bạn vẫn có thể ghi chi tiêu ngoại tệ sau; đây là &quot;mặc
-                định&quot; báo cáo.
-              </p>
+              <h2 className="text-lg font-semibold">{t("onboarding_currency_title")}</h2>
+              <p className="text-sm text-muted-foreground">{t("onboarding_currency_subtitle")}</p>
               <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
                 {CURRENCIES.map((c) => (
                   <Button
@@ -227,10 +228,10 @@ export function OnboardingWizard() {
               </div>
               <div className="mt-auto flex gap-2 pt-4">
                 <Button type="button" variant="outline" className="flex-1" onClick={() => setStep(1)}>
-                  Quay lại
+                  {t("onboarding_back")}
                 </Button>
                 <Button type="button" className="flex-1" onClick={() => setStep(3)}>
-                  Tiếp
+                  {t("onboarding_next")}
                 </Button>
               </div>
             </motion.div>
@@ -249,19 +250,17 @@ export function OnboardingWizard() {
                   <LuckyNekoMascot variant="hero" celebrateOnMount={false} />
                 </div>
               </div>
-              <h2 className="text-center text-lg font-semibold">Xong rồi!</h2>
+              <h2 className="text-center text-lg font-semibold">{t("onboarding_done_title")}</h2>
               <ul className="rounded-xl border bg-card px-4 py-3 text-sm text-muted-foreground">
                 <li>
-                  <span className="font-medium text-foreground">Ví: </span>
+                  <span className="font-medium text-foreground">{t("onboarding_done_summary_wallets")} </span>
                   {walletPayload.join(" · ")}
                 </li>
                 <li className="mt-2">
-                  <span className="font-medium text-foreground">Tiền tệ: </span>
+                  <span className="font-medium text-foreground">{t("onboarding_done_summary_currency")} </span>
                   {currency}
                 </li>
-                <li className="mt-2 text-xs">
-                  Danh mục chi tiêu chuẩn đã được tạo sẵn; bạn có thể chỉnh thêm trong Tools sau.
-                </li>
+                <li className="mt-2 text-xs">{t("onboarding_done_summary_hint")}</li>
               </ul>
 
               {state.error ? <p className="text-sm text-destructive">{state.error}</p> : null}
@@ -274,7 +273,7 @@ export function OnboardingWizard() {
               </form>
 
               <Button type="button" variant="ghost" className="w-full" onClick={() => setStep(2)}>
-                Quay lại chỉnh
+                {t("onboarding_back")}
               </Button>
             </motion.div>
           ) : null}
