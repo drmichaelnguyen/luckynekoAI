@@ -50,5 +50,19 @@
 
   body {
     @apply bg-background text-foreground antialiased;
+    /* Prevent iOS rubber-band scroll from hiding the fixed composer bar */
+    overscroll-behavior-y: none;
+  }
+
+  /* Prevent iOS from auto-zooming when tapping inputs (requires font-size >= 16px) */
+  input,
+  textarea,
+  select {
+    font-size: max(16px, 1em);
+  }
+
+  /* Ensure fixed bottom bar never clips on notched phones */
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
   }
 }

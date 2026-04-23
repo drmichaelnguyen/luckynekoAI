@@ -59,6 +59,7 @@ export function useVoiceChat({ locale, enabled, sendSpokenText }: UseVoiceChatOp
   const genRef = useRef(0);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const restartTimerRef = useRef<number | null>(null);
+  const loopListenRef = useRef<(gen: number) => void>(() => {});
   const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
   const sendRef = useRef(sendSpokenText);
   sendRef.current = sendSpokenText;
@@ -87,6 +88,15 @@ export function useVoiceChat({ locale, enabled, sendSpokenText }: UseVoiceChatOp
       restartTimerRef.current = null;
     }
   }, []);
+
+  const scheduleListen = useCallback(
+    (gen: number, delayMs: number) => {
+      if (gen !== genRef.current || modeRef.current === "off") return;
+      clearRestartTimer();
+      restartTimerRef.current = window.setTimeout(() => loopListenRef.current(gen), delayMs);
+    },
+    [clearRestartTimer],
+  );
 
   const stopConversation = useCallback(() => {
     genRef.current += 1;
@@ -198,7 +208,7 @@ export function useVoiceChat({ locale, enabled, sendSpokenText }: UseVoiceChatOp
         }
         if (code === "no-speech" || code === "audio-capture") {
           if (modeRef.current !== "off") {
-            restartTimerRef.current = window.setTimeout(() => loopListen(gen), 500);
+            scheduleListen(gen, 250);
           }
           return;
         }
@@ -207,7 +217,7 @@ export function useVoiceChat({ locale, enabled, sendSpokenText }: UseVoiceChatOp
           return;
         }
         if (modeRef.current !== "off") {
-          restartTimerRef.current = window.setTimeout(() => loopListen(gen), 700);
+          scheduleListen(gen, 350);
         }
       };
 
@@ -215,7 +225,7 @@ export function useVoiceChat({ locale, enabled, sendSpokenText }: UseVoiceChatOp
         if (gen !== genRef.current || modeRef.current === "off") return;
         const heard = (finalTranscript || heardSoFar).trim();
         if (!heard) {
-          restartTimerRef.current = window.setTimeout(() => loopListen(gen), 400);
+          scheduleListen(gen, 220);
           return;
         }
 
@@ -238,7 +248,7 @@ export function useVoiceChat({ locale, enabled, sendSpokenText }: UseVoiceChatOp
           if (gen !== genRef.current || modeRef.current === "off") return;
           setTranscript("");
           setMode("listening");
-          restartTimerRef.current = window.setTimeout(() => loopListen(gen), 650);
+          scheduleListen(gen, 180);
         })();
       };
 
@@ -247,12 +257,16 @@ export function useVoiceChat({ locale, enabled, sendSpokenText }: UseVoiceChatOp
         rec.start();
       } catch {
         if (gen === genRef.current) {
-          restartTimerRef.current = window.setTimeout(() => loopListen(gen), 650);
+          scheduleListen(gen, 300);
         }
       }
     },
-    [clearRestartTimer, enabled, locale, speak, stopConversation],
+    [clearRestartTimer, enabled, locale, scheduleListen, speak, stopConversation],
   );
+
+  useEffect(() => {
+    loopListenRef.current = loopListen;
+  }, [loopListen]);
 
   const startVoice = useCallback(() => {
     if (!enabled || !pickRecognitionCtor()) return;
@@ -273,8 +287,8 @@ export function useVoiceChat({ locale, enabled, sendSpokenText }: UseVoiceChatOp
     genRef.current += 1;
     const gen = genRef.current;
     setMode("listening");
-    window.setTimeout(() => loopListen(gen), 150);
-  }, [clearRestartTimer, enabled, loopListen]);
+    scheduleListen(gen, 80);
+  }, [clearRestartTimer, enabled, scheduleListen]);
 
   useEffect(() => {
     if (!enabled && modeRef.current !== "off") {

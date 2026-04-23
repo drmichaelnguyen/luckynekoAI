@@ -613,8 +613,8 @@ export function ChatInterface() {
         onBooksChanged={refreshPendingCount}
       />
 
-      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-4">
-        <ScrollArea className="min-h-[calc(100dvh-8.25rem)] pr-2">
+      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-3 pb-[calc(8rem+env(safe-area-inset-bottom))] pt-4">
+        <ScrollArea className="min-h-[calc(100dvh-7.5rem)] pr-1">
           <div className="space-y-3 pb-4">
             <AnimatePresence initial={false}>
               {messages.map((m) => (
@@ -773,117 +773,124 @@ export function ChatInterface() {
             />
 
             {/* ── Google-style pill input ── */}
-            <div className="flex items-end gap-2 rounded-2xl border bg-muted/40 px-2 py-1.5 shadow-sm ring-1 ring-transparent transition-all focus-within:bg-background focus-within:ring-primary/40">
-              {/* Attach button — left inside pill */}
-              <button
-                type="button"
-                id="composer-attach"
-                onClick={() => fileInputRef.current?.click()}
-                aria-label="Attach image or PDF"
-                title="Attach"
-                className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
-              >
-                <Paperclip className="h-5 w-5" />
-              </button>
-
-              {/* Text input — grows */}
-              <Textarea
-                ref={textareaRef}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onPaste={onPasteComposer}
-                placeholder="Message NekoZeni…"
-                className="min-h-[40px] flex-1 resize-none border-0 bg-transparent px-0 py-1 text-sm shadow-none outline-none focus-visible:ring-0"
-                rows={1}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    submit();
-                  }
-                }}
-              />
-
-              {/* Right side: camera + mic/stop + send */}
-              <div className="mb-0.5 flex shrink-0 items-center gap-1">
-                {/* Camera — triggers file picker (images only) */}
+            <div className="flex flex-col rounded-2xl border bg-muted/40 shadow-sm ring-1 ring-transparent transition-all focus-within:bg-background focus-within:ring-primary/40">
+              {/* Text input row */}
+              <div className="flex items-end gap-1 px-2 pt-1.5">
+                {/* Attach button — left inside pill */}
                 <button
                   type="button"
-                  id="composer-camera"
-                  onClick={() => {
-                    if (!fileInputRef.current) return;
-                    fileInputRef.current.accept = "image/*";
-                    fileInputRef.current.click();
-                    // restore after a tick
-                    setTimeout(() => {
-                      if (fileInputRef.current) fileInputRef.current.accept = "image/*,application/pdf";
-                    }, 500);
-                  }}
-                  aria-label="Attach photo"
-                  title="Attach photo"
-                  className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                  id="composer-attach"
+                  onClick={() => fileInputRef.current?.click()}
+                  aria-label="Attach image or PDF"
+                  title="Attach"
+                  className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
                 >
-                  <Camera className="h-5 w-5" />
+                  <Paperclip className="h-4 w-4" />
                 </button>
 
-                {/* Mic / Stop voice */}
-                {status === "authenticated" ? (
-                  voice.mode === "off" ? (
-                    <button
-                      type="button"
-                      id="composer-mic"
-                      onClick={() => voice.startVoice()}
-                      disabled={!voice.supported || chatBusy || files.length > 0}
-                      aria-label={t("voice_start_aria")}
-                      title={
-                        !voice.supported
-                          ? t("voice_unsupported_hint")
-                          : files.length > 0
-                            ? t("voice_blocked_attachments")
-                            : t("voice_start_title")
-                      }
-                      className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40"
-                    >
-                      <Mic className="h-5 w-5" />
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      id="composer-stop-voice"
-                      onClick={() => voice.stopConversation()}
-                      aria-label={t("voice_stop_aria")}
-                      title={t("voice_stop_title")}
-                      className="flex h-8 w-8 items-center justify-center rounded-full text-destructive transition hover:bg-destructive/10"
-                    >
-                      <Square className="h-4 w-4 fill-current" />
-                    </button>
-                  )
-                ) : null}
+                {/* Text input — grows */}
+                <Textarea
+                  ref={textareaRef}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onPaste={onPasteComposer}
+                  placeholder="Message NekoZeni…"
+                  className="min-h-[36px] flex-1 resize-none border-0 bg-transparent px-0 py-1 text-sm shadow-none outline-none focus-visible:ring-0"
+                  rows={1}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      submit();
+                    }
+                  }}
+                />
+              </div>
 
-                {/* Send button — visible when there's content */}
-                <AnimatePresence>
-                  {(draft.trim() || files.length > 0) && voice.mode === "off" ? (
-                    <motion.button
-                      key="send-btn"
-                      initial={{ scale: 0.6, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      exit={{ scale: 0.6, opacity: 0 }}
-                      transition={{ type: "spring", stiffness: 500, damping: 28 }}
+              {/* Bottom action row — always visible */}
+              <div className="flex items-center justify-between px-2 pb-1.5 pt-0.5">
+                {/* Left: camera */}
+                <div className="flex items-center gap-1">
+                  {/* Camera — triggers file picker (images only) */}
+                  {!(draft.trim() || files.length > 0) && (
+                    <button
                       type="button"
-                      id="composer-send"
-                      onClick={submit}
-                      disabled={isPending || chatBusy}
-                      aria-label="Send message"
-                      title="Send"
-                      className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:opacity-60"
+                      id="composer-camera"
+                      onClick={() => {
+                        if (!fileInputRef.current) return;
+                        fileInputRef.current.accept = "image/*";
+                        fileInputRef.current.click();
+                        setTimeout(() => {
+                          if (fileInputRef.current) fileInputRef.current.accept = "image/*,application/pdf";
+                        }, 500);
+                      }}
+                      aria-label="Attach photo"
+                      title="Attach photo"
+                      className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
                     >
-                      {isPending || chatBusy ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <SendHorizontal className="h-4 w-4" />
-                      )}
-                    </motion.button>
+                      <Camera className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Right: mic/stop + send */}
+                <div className="flex items-center gap-2">
+                  {/* Mic / Stop voice */}
+                  {status === "authenticated" ? (
+                    voice.mode === "off" ? (
+                      <button
+                        type="button"
+                        id="composer-mic"
+                        onClick={() => voice.startVoice()}
+                        disabled={!voice.supported || chatBusy || files.length > 0}
+                        aria-label={t("voice_start_aria")}
+                        title={
+                          !voice.supported
+                            ? t("voice_unsupported_hint")
+                            : files.length > 0
+                              ? t("voice_blocked_attachments")
+                              : t("voice_start_title")
+                        }
+                        className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40"
+                      >
+                        <Mic className="h-4 w-4" />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        id="composer-stop-voice"
+                        onClick={() => voice.stopConversation()}
+                        aria-label={t("voice_stop_aria")}
+                        title={t("voice_stop_title")}
+                        className="flex h-8 w-8 items-center justify-center rounded-full text-destructive transition hover:bg-destructive/10"
+                      >
+                        <Square className="h-4 w-4 fill-current" />
+                      </button>
+                    )
                   ) : null}
-                </AnimatePresence>
+
+                  {/* Send button — always rendered, opacity changes */}
+                  <motion.button
+                    key="send-btn"
+                    animate={{
+                      scale: (draft.trim() || files.length > 0) && voice.mode === "off" ? 1 : 0.7,
+                      opacity: (draft.trim() || files.length > 0) && voice.mode === "off" ? 1 : 0.3,
+                    }}
+                    transition={{ type: "spring", stiffness: 500, damping: 28 }}
+                    type="button"
+                    id="composer-send"
+                    onClick={submit}
+                    disabled={isPending || chatBusy || !(draft.trim() || files.length > 0)}
+                    aria-label="Send message"
+                    title="Send"
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed"
+                  >
+                    {isPending || chatBusy ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <SendHorizontal className="h-4 w-4" />
+                    )}
+                  </motion.button>
+                </div>
               </div>
             </div>
 

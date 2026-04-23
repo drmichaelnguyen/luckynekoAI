@@ -1,6 +1,6 @@
 import type { FlowDirection, PrismaClient, TxRecurrence, TxStatus } from "@prisma/client";
 
-import { slugify } from "@/lib/finance/slug";
+import { findOrCreateCategory } from "@/lib/finance/category-resolver";
 
 function asString(v: unknown): string | null {
   if (typeof v === "string") return v.trim() || null;
@@ -109,16 +109,6 @@ export async function persistFreeformLedgerEntry(
   }
 
   const categoryName = asString(transaction.category) ?? asString(transaction.categoryName);
-  const categories = await db.category.findMany({ where: { userId } });
-  const other = categories.find((c) => c.slug === "other");
-  let categoryId: string | null = other?.id ?? null;
-  if (categoryName) {
-    const hit = categories.find(
-      (c) => c.name.toLowerCase() === categoryName.toLowerCase() || c.slug === slugify(categoryName),
-    );
-    if (hit) categoryId = hit.id;
-  }
-
   const recurrenceRaw = asString(transaction.recurrence)?.toLowerCase();
   let recurrence: TxRecurrence = "one_time";
   if (recurrenceRaw === "recurrent" || recurrenceRaw === "recurring" || recurrenceRaw === "subscription") {
@@ -141,6 +131,14 @@ export async function persistFreeformLedgerEntry(
   const merchant = asString(transaction.merchant);
   const notes = asString(transaction.notes);
   const occurredAt = parseOccurredAt(asString(transaction.transactionDate) ?? asString(transaction.occurredAt));
+  const category = await findOrCreateCategory({
+    db,
+    userId,
+    label: categoryName,
+    direction,
+    payeeKind,
+    fallbackSlug: direction === "in" ? "income" : "other",
+  });
   const duplicate = await findDuplicateTransaction({
     db,
     userId,
@@ -160,7 +158,7 @@ export async function persistFreeformLedgerEntry(
     data: {
       userId,
       walletId: wallet.id,
-      categoryId,
+      categoryId: category?.id ?? null,
       amountCents: amountAbsCents,
       direction,
       currency: asString(transaction.currency)?.toUpperCase() ?? "CAD",
@@ -178,7 +176,7 @@ export async function persistFreeformLedgerEntry(
   const detail =
     status === "pending_user"
       ? `Saved as pending (${wallet.name}) — open Tools → Confirm to say if it repeats.`
-      : `Saved to ${wallet.name} · ${categoryName ?? "Other"}.`;
+      : `Saved to ${wallet.name} · ${category?.parent ? `${category.parent.name} > ${category.name}` : category?.name ?? "Other"}.`;
   return { saved: true, detail, transactionId: created.id };
 }
 

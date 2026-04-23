@@ -1,5 +1,7 @@
 import type { FlowDirection, PrismaClient, TxRecurrence, TxStatus } from "@prisma/client";
 
+import { findOrCreateCategory } from "@/lib/finance/category-resolver";
+
 function asString(v: unknown): string | null {
   if (typeof v === "string") return v.trim() || null;
   if (typeof v === "number" && Number.isFinite(v)) return String(v);
@@ -173,11 +175,14 @@ export async function persistReceiptLedgerEntry(
     return { saved: false, detail: "No wallet configured.", transactionId: undefined };
   }
 
-  const categories = await db.category.findMany({ where: { userId } });
-  const other = categories.find((c) => c.slug === "other");
-  const categoryId = other?.id ?? null;
-
   const merchant = asString(receipt.merchant);
+  const category = await findOrCreateCategory({
+    db,
+    userId,
+    label: "Other",
+    direction: "out",
+    fallbackSlug: "other",
+  });
   const occurredAt = resolveDate(asString(receipt.purchaseDate), asString(receipt.date), asString(receipt.transactionDate));
   const duplicate = await findDuplicateTransaction({
     db,
@@ -207,7 +212,7 @@ export async function persistReceiptLedgerEntry(
     data: {
       userId,
       walletId: wallet.id,
-      categoryId,
+      categoryId: category?.id ?? null,
       amountCents: amountAbsCents,
       direction: "out" as FlowDirection,
       currency: currency?.toUpperCase() ?? "CAD",
@@ -252,14 +257,14 @@ export async function persistPaystubLedgerEntry(
     return { saved: false, detail: "No wallet configured.", transactionId: undefined };
   }
 
-  const categories = await db.category.findMany({ where: { userId } });
-  const income =
-    categories.find((c) => c.kind === "income") ??
-    categories.find((c) => c.slug === "other") ??
-    categories[0];
-  const categoryId = income?.id ?? null;
-
   const employer = asString(paystub.employerName);
+  const category = await findOrCreateCategory({
+    db,
+    userId,
+    label: employer ? `Income > ${employer}` : "Income",
+    direction: "in",
+    fallbackSlug: "income",
+  });
   // Prefer the actual pay date, then period end, then period start
   const occurredAt = resolveDate(
     asString(paystub.payDate),
@@ -293,7 +298,7 @@ export async function persistPaystubLedgerEntry(
     data: {
       userId,
       walletId: wallet.id,
-      categoryId,
+      categoryId: category?.id ?? null,
       amountCents: amountAbsCents,
       direction: "in" as FlowDirection,
       currency: currency?.toUpperCase() ?? "CAD",

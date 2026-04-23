@@ -1,8 +1,26 @@
 "use server";
 
 import { auth } from "@/auth";
+import {
+  defaultNextReminderAt,
+  parseCadenceInput,
+  type RecurrentCadence,
+} from "@/lib/finance/cadence";
 import { ensureFinanceSeed } from "@/lib/finance/seed";
 import { prisma } from "@/lib/prisma";
+
+export type ConfirmRecurringMode = {
+  kind: "recurring";
+  cadence: RecurrentCadence;
+  customCadence?: string | null;
+  nextReminderAt?: string | null;
+};
+export type ConfirmTransactionMode =
+  | { kind: "one_time" }
+  | ConfirmRecurringMode
+  // Back-compat with the original string form used by older UI callers.
+  | "one_time"
+  | "start_recurring_monthly";
 
 export async function listWalletsAction() {
   const session = await auth();
@@ -76,7 +94,7 @@ export async function listPendingTransactionsAction() {
 
 export async function confirmTransactionAction(
   id: string,
-  mode: "one_time" | "start_recurring_monthly",
+  mode: ConfirmTransactionMode,
 ) {
   const session = await auth();
   if (!session?.user?.id) return { ok: false as const, error: "Unauthorized" };
@@ -87,7 +105,14 @@ export async function confirmTransactionAction(
   });
   if (!tx) return { ok: false as const, error: "Nothing to confirm." };
 
-  if (mode === "one_time") {
+  const normalized =
+    typeof mode === "string"
+      ? mode === "one_time"
+        ? { kind: "one_time" as const }
+        : { kind: "recurring" as const, cadence: "monthly" as RecurrentCadence }
+      : mode;
+
+  if (normalized.kind === "one_time") {
     await prisma.transaction.update({
       where: { id: tx.id },
       data: { recurrence: "one_time", status: "posted", confirmReason: null },
@@ -95,16 +120,27 @@ export async function confirmTransactionAction(
     return { ok: true as const };
   }
 
+  const cadence = normalized.cadence;
+  const customCadence = (normalized.customCadence ?? null)?.trim() || null;
+  const parsedReminder = normalized.nextReminderAt
+    ? new Date(normalized.nextReminderAt)
+    : null;
+  const nextReminderAt =
+    parsedReminder && !Number.isNaN(parsedReminder.getTime())
+      ? parsedReminder
+      : defaultNextReminderAt(tx.occurredAt, cadence);
+
   const series = await prisma.recurrentSeries.create({
     data: {
       userId: session.user.id,
       walletId: tx.walletId,
       categoryId: tx.categoryId,
       label: tx.merchant ?? tx.memo ?? "Recurring",
-      cadence: "monthly",
+      cadence,
+      customCadence,
       amountCents: tx.amountCents,
       direction: tx.direction,
-      nextReminderAt: new Date(tx.occurredAt.getTime() + 30 * 24 * 60 * 60 * 1000),
+      nextReminderAt,
       notes: "Created from a confirmed chat or CSV import.",
     },
   });
@@ -119,7 +155,146 @@ export async function confirmTransactionAction(
     },
   });
 
-  return { ok: true as const };
+  return { ok: true as const, seriesId: series.id };
+}
+
+export type RecurrentSeriesRow = {
+  id: string;
+  label: string;
+  walletId: string;
+  walletName: string;
+  categoryId: string | null;
+  categoryName: string;
+  cadence: RecurrentCadence;
+  customCadence: string | null;
+  amountCents: number;
+  direction: "in" | "out";
+  currency: string;
+  nextReminderAt: string | null;
+  isPaused: boolean;
+  notes: string | null;
+};
+
+export async function listRecurrentSeriesAction(): Promise<
+  { ok: true; rows: RecurrentSeriesRow[] } | { ok: false; error: string }
+> {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false, error: "Unauthorized" };
+  const rows = await prisma.recurrentSeries.findMany({
+    where: { userId: session.user.id },
+    orderBy: [{ isPaused: "asc" }, { nextReminderAt: "asc" }, { createdAt: "desc" }],
+    include: {
+      wallet: { select: { name: true } },
+      category: { select: { name: true } },
+      transactions: { select: { currency: true }, take: 1, orderBy: { occurredAt: "desc" } },
+    },
+  });
+  return {
+    ok: true,
+    rows: rows.map((s) => ({
+      id: s.id,
+      label: s.label,
+      walletId: s.walletId,
+      walletName: s.wallet.name,
+      categoryId: s.categoryId,
+      categoryName: s.category?.name ?? "Other",
+      cadence: s.cadence as RecurrentCadence,
+      customCadence: s.customCadence,
+      amountCents: s.amountCents,
+      direction: s.direction as "in" | "out",
+      currency: s.transactions[0]?.currency ?? "CAD",
+      nextReminderAt: s.nextReminderAt?.toISOString() ?? null,
+      isPaused: s.isPaused,
+      notes: s.notes,
+    })),
+  };
+}
+
+export type UpdateRecurrentSeriesFields = {
+  label?: string;
+  cadence?: RecurrentCadence;
+  customCadence?: string | null;
+  nextReminderAt?: string | null;
+  isPaused?: boolean;
+};
+
+export async function updateRecurrentSeriesAction(
+  id: string,
+  fields: UpdateRecurrentSeriesFields,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false, error: "Unauthorized" };
+  const existing = await prisma.recurrentSeries.findFirst({
+    where: { id, userId: session.user.id },
+  });
+  if (!existing) return { ok: false, error: "Not found." };
+
+  const data: Record<string, unknown> = {};
+  if (typeof fields.label === "string" && fields.label.trim()) {
+    data.label = fields.label.trim().slice(0, 200);
+  }
+  if (fields.cadence) data.cadence = fields.cadence;
+  if (fields.customCadence !== undefined) {
+    const v = fields.customCadence?.trim() ?? "";
+    data.customCadence = v ? v.slice(0, 200) : null;
+  }
+  if (fields.nextReminderAt !== undefined) {
+    if (!fields.nextReminderAt) data.nextReminderAt = null;
+    else {
+      const d = new Date(fields.nextReminderAt);
+      if (!Number.isNaN(d.getTime())) data.nextReminderAt = d;
+    }
+  }
+  if (typeof fields.isPaused === "boolean") data.isPaused = fields.isPaused;
+
+  if (Object.keys(data).length === 0) return { ok: true };
+  await prisma.recurrentSeries.update({ where: { id }, data });
+  return { ok: true };
+}
+
+export async function deleteRecurrentSeriesAction(
+  id: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false, error: "Unauthorized" };
+  const r = await prisma.recurrentSeries.deleteMany({
+    where: { id, userId: session.user.id },
+  });
+  if (r.count === 0) return { ok: false, error: "Not found." };
+  return { ok: true };
+}
+
+/**
+ * Natural-language helper for the chat bot — parses a freeform description and
+ * applies it to a pending transaction as either a one-time or recurring confirmation.
+ * Called by chat.ts when the LLM returns a pendingRecurrenceUpdate.
+ */
+export async function applyPendingRecurrenceFromTextAction(args: {
+  pendingTransactionId: string;
+  text: string;
+  nextReminderAt?: string | null;
+}): Promise<{ ok: true; seriesId?: string } | { ok: false; error: string }> {
+  const { pendingTransactionId, text } = args;
+  const lower = (text ?? "").trim().toLowerCase();
+  if (!lower) return { ok: false, error: "No cadence text." };
+
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false, error: "Unauthorized" };
+
+  if (/^(one[\s-]?time|one off|not recurring|no repeat|doesn'?t repeat)$/.test(lower)) {
+    const r = await confirmTransactionAction(pendingTransactionId, { kind: "one_time" });
+    return r.ok ? { ok: true } : { ok: false, error: r.error };
+  }
+
+  const { cadence, customCadence } = parseCadenceInput(text);
+  const r = await confirmTransactionAction(pendingTransactionId, {
+    kind: "recurring",
+    cadence,
+    customCadence,
+    nextReminderAt: args.nextReminderAt ?? null,
+  });
+  if (!r.ok) return { ok: false, error: r.error };
+  return { ok: true, seriesId: r.seriesId };
 }
 
 export async function rejectPendingTransactionAction(id: string) {

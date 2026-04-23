@@ -238,6 +238,8 @@ model RecurrentSeries {
   category       Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   label          String
   cadence        RecurrentCadence @default(monthly)
+  /// Free-form description used when cadence is "irregular" or to annotate a standard cadence (e.g. "every 2 weeks", "quarterly", "every 15th").
+  customCadence  String?
   amountCents    Int
   direction      FlowDirection
   nextReminderAt DateTime?

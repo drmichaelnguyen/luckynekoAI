@@ -171,7 +171,7 @@ export async function ensureFinanceSeed(db: PrismaClient, userId: string): Promi
 export async function financeContextLines(db: PrismaClient, userId: string): Promise<string> {
   try {
     await ensureFinanceSeed(db, userId);
-    const [user, wallets, categories, plans, balanceGroups, userPrefs, spendingCtx, correctionExamples, chatPrefs] = await Promise.all([
+    const [user, wallets, categories, plans, balanceGroups, userPrefs, spendingCtx, correctionExamples, chatPrefs, pendingConfirms] = await Promise.all([
       findUserNameAndNicknameById(db, userId),
       db.wallet.findMany({
         where: { userId },
@@ -193,6 +193,21 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
       loadSpendingPatterns(db, userId),
       loadCorrectionExamples(db, userId, 3),
       loadChatPreferences(db, userId),
+      db.transaction.findMany({
+        where: { userId, status: "pending_user" },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+        select: {
+          id: true,
+          amountCents: true,
+          currency: true,
+          direction: true,
+          merchant: true,
+          memo: true,
+          occurredAt: true,
+          confirmReason: true,
+        },
+      }).catch(() => []),
     ]);
 
     const preferredCurrency = (userPrefs?.preferredCurrency ?? "CAD").toUpperCase();
@@ -259,6 +274,22 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
     const spendingLines = buildSpendingPatternLines(spendingCtx);
     const correctionLines = buildCorrectionExamplesLines(correctionExamples);
 
+    const pendingLines =
+      pendingConfirms.length === 0
+        ? []
+        : [
+            "PENDING CONFIRMATIONS (user has not yet decided if these repeat; if the user answers with a cadence in chat, return pendingRecurrenceUpdate):",
+            ...pendingConfirms.map((p) => {
+              const name = p.merchant || p.memo || "No description";
+              const amt = `${p.currency} ${(p.amountCents / 100).toFixed(2)}`;
+              const dir = p.direction === "out" ? "out" : "in";
+              const date = p.occurredAt.toISOString().slice(0, 10);
+              const reason = p.confirmReason ? ` · reason: ${p.confirmReason.slice(0, 120)}` : "";
+              return `- ${name} · ${amt} ${dir} · ${date}${reason}`;
+            }),
+            "",
+          ];
+
     return [
       ...prefLines,
       "",
@@ -270,6 +301,7 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
       "",
       ...planLines,
       "",
+      ...pendingLines,
       ...(spendingLines.length > 0 ? [...spendingLines, ""] : []),
       ...(correctionLines.length > 0 ? [...correctionLines, ""] : []),
       ...(fxContext ? [fxContext] : []),

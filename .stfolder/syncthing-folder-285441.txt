@@ -1,0 +1,5 @@
+# This directory is a Syncthing folder marker.
+# Do not delete.
+
+folderID: 4kmkr-4miwe
+created: 2026-04-23T10:02:10-07:00

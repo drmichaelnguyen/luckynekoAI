@@ -80,6 +80,19 @@ const GeminiResponseSchema = z
       })
       .nullable()
       .optional(),
+    /**
+     * Populated when the user replies with a cadence decision for a pending ledger confirmation
+     * (e.g. "yearly", "every 2 weeks", "one-time"). Applied server-side against the most recent
+     * matching pending transaction.
+     */
+    pendingRecurrenceUpdate: z
+      .object({
+        merchantHint: z.string().nullable().optional(),
+        cadenceText: z.string(),
+        nextReminderAt: z.string().nullable().optional(),
+      })
+      .nullable()
+      .optional(),
   })
   .passthrough();
 
@@ -130,7 +143,8 @@ Your JSON MUST match this shape (optional keys only when relevant):
   "extractedTextSummary": string | null,
   "awaitingLedgerDecision": boolean,
   "receiptSplit": null | [{ "description": string, "category": string, "amount": number, "currency": string, "direction": "in"|"out" }],
-  "planSuggestion": null | { "title": string, "description": string | null, "amountCents": number | null, "currency": string, "period": "none" | "monthly" | "yearly" }
+  "planSuggestion": null | { "title": string, "description": string | null, "amountCents": number | null, "currency": string, "period": "none" | "monthly" | "yearly" },
+  "pendingRecurrenceUpdate": null | { "merchantHint": string | null, "cadenceText": string, "nextReminderAt": string | null }
 }
 
 Rules:
@@ -176,6 +190,13 @@ transactionList rules for Apple Pay / wallet screenshots:
 - Use today’s year when the screenshot only shows relative timing like "44 minutes ago" or "Yesterday"; convert "Yesterday" to the actual ISO date relative to TODAY'S DATE.
 - If category is unclear, choose the closest category from USER LEDGER CONTEXT or use "Other". If the best fit is missing, you may propose a new category or a "Parent > Child" subcategory path.
 - If fewer than 1 complete transaction row is legible, do not use transaction_list_capture.
+
+Pending-recurrence replies (pendingRecurrenceUpdate):
+- The USER LEDGER CONTEXT may list PENDING CONFIRMATIONS — transactions we already saved but are waiting on the user to decide if they repeat. If the user's new message is answering that ("yes yearly", "every 2 weeks", "one-time", "Cloudflare is yearly", etc.), populate pendingRecurrenceUpdate.
+- merchantHint: a short match for the pending row (merchant or memo substring). Leave null if there is only one pending row or the user did not name one.
+- cadenceText: exactly what the user said, verbatim ("yearly", "one-time", "every 2 weeks", "every 15th"). The server parses it.
+- nextReminderAt: ISO yyyy-mm-dd if the user named a date for the next reminder, else null.
+- When you populate pendingRecurrenceUpdate, set transaction to null and documentKind to "freeform_transaction" unless they also described a new purchase in the same message.
 
 Bookkeeping rules for freeform_transaction:
 - When the user describes everyday shopping, use recurrence "one_time" and needsUserConfirm false unless unclear.
@@ -804,6 +825,49 @@ export async function handleChatInput(formData: FormData) {
       }
     }
 
+    let pendingRecurrenceApplied: null | { label: string; cadenceText: string } = null;
+    if (
+      data.pendingRecurrenceUpdate &&
+      typeof data.pendingRecurrenceUpdate.cadenceText === "string" &&
+      data.pendingRecurrenceUpdate.cadenceText.trim()
+    ) {
+      try {
+        const hint = (data.pendingRecurrenceUpdate.merchantHint ?? "").trim().toLowerCase();
+        const pending = await prisma.transaction.findMany({
+          where: { userId, status: "pending_user" },
+          orderBy: { createdAt: "desc" },
+          take: 10,
+          select: { id: true, merchant: true, memo: true },
+        });
+        const match =
+          (hint &&
+            pending.find(
+              (p) =>
+                (p.merchant ?? "").toLowerCase().includes(hint) ||
+                (p.memo ?? "").toLowerCase().includes(hint),
+            )) ||
+          pending[0] ||
+          null;
+        if (match) {
+          const { applyPendingRecurrenceFromTextAction } = await import("@/actions/finance");
+          const r = await applyPendingRecurrenceFromTextAction({
+            pendingTransactionId: match.id,
+            text: data.pendingRecurrenceUpdate.cadenceText,
+            nextReminderAt: data.pendingRecurrenceUpdate.nextReminderAt ?? null,
+          });
+          if (r.ok) {
+            pendingRecurrenceApplied = {
+              label: match.merchant ?? match.memo ?? "pending item",
+              cadenceText: data.pendingRecurrenceUpdate.cadenceText.trim(),
+            };
+            assistantMessage = `${assistantMessage}\n\nGot it — set "${pendingRecurrenceApplied.label}" to ${pendingRecurrenceApplied.cadenceText}.`;
+          }
+        }
+      } catch {
+        /* best-effort — chat reply still returns */
+      }
+    }
+
     // Best-effort chat style learning — never blocks response
     detectAndSaveChatPreferences(prisma, userId, message, assistantMessage).catch(() => {});
 
@@ -814,6 +878,7 @@ export async function handleChatInput(formData: FormData) {
       followUpQuestion,
       ...(pendingDocumentImport ? { pendingDocumentImport } : {}),
       ...(planCreated ? { planCreated: true as const } : {}),
+      ...(pendingRecurrenceApplied ? { pendingRecurrenceApplied } : {}),
     };
   } catch (error) {
     await rollbackChatUploads();
