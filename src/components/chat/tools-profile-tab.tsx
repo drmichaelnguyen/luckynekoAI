@@ -174,8 +174,12 @@ export function ToolsProfileTab({ active }: { active: boolean }) {
         </form>
       </div>
 
-      <div className="border-t pt-4">
-        <h3 className="text-xs font-medium text-foreground">Change password</h3>
+      <details className="group border-t pt-4">
+        <summary className="flex cursor-pointer list-none items-center justify-between">
+          <h3 className="text-xs font-medium text-foreground">Change password</h3>
+          <span className="text-[10px] text-muted-foreground group-open:hidden">Tap to expand</span>
+          <span className="hidden text-[10px] text-muted-foreground group-open:inline">Tap to collapse</span>
+        </summary>
         <form action={passwordFormAction} className="mt-3 space-y-3">
           <div className="space-y-1">
             <label htmlFor="pf-cur" className="text-xs font-medium">
@@ -201,7 +205,8 @@ export function ToolsProfileTab({ active }: { active: boolean }) {
             Update password
           </Button>
         </form>
-      </div>
+      </details>
+
 
       <div className="border-t pt-4">
         <Button

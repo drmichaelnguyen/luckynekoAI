@@ -49,7 +49,7 @@ function SeriesChart({
   return (
     <div className="mt-4">
       <div className="mb-2 text-[11px] font-medium text-muted-foreground">
-        Timeline (green = in, primary = out) · drag horizontally if many days
+        Timeline (green = in, red = out) · drag horizontally if many days
       </div>
       <div className="overflow-x-auto pb-1">
         <div className="flex min-h-[128px] items-end gap-1.5 pt-1">
@@ -64,11 +64,11 @@ function SeriesChart({
               >
                 <div className="flex min-h-[84px] w-full flex-col justify-end gap-px">
                   <div
-                    className="w-full min-h-0 rounded-t-sm bg-emerald-500/75 transition-[height]"
+                    className="w-full min-h-0 rounded-t-sm bg-emerald-500/80 transition-[height]"
                     style={{ height: `${Math.max(2, inH)}px` }}
                   />
                   <div
-                    className="w-full min-h-0 rounded-b-sm bg-primary transition-[height]"
+                    className="w-full min-h-0 rounded-b-sm bg-red-500/80 transition-[height]"
                     style={{ height: `${Math.max(2, outH)}px` }}
                   />
                 </div>
@@ -82,6 +82,15 @@ function SeriesChart({
       </div>
     </div>
   );
+}
+
+function redIntensityClass(pct: number): string {
+  if (pct >= 90) return "bg-red-700";
+  if (pct >= 70) return "bg-red-600";
+  if (pct >= 50) return "bg-red-500";
+  if (pct >= 30) return "bg-red-400";
+  if (pct >= 15) return "bg-red-300";
+  return "bg-red-200";
 }
 
 function InteractiveBarBlock<T extends { name: string; expenseCents: number; incomeCents: number }>({
@@ -116,6 +125,10 @@ function InteractiveBarBlock<T extends { name: string; expenseCents: number; inc
         {filtered.map((row) => {
           const v = row[valueKey];
           const pct = Math.round((v / max) * 100);
+          const barClass =
+            valueKey === "expenseCents"
+              ? redIntensityClass(pct)
+              : "bg-emerald-500";
           return (
             <li key={`${row.name}-${valueKey}`} className="space-y-1">
               <button
@@ -125,14 +138,13 @@ function InteractiveBarBlock<T extends { name: string; expenseCents: number; inc
               >
                 <div className="flex justify-between gap-2 px-0.5 text-[11px]">
                   <span className="min-w-0 truncate font-medium text-foreground">{row.name}</span>
-                  <span className="shrink-0 text-muted-foreground">{formatMoney(v, currency)}</span>
+                  <span className={cn("shrink-0 font-medium", valueKey === "expenseCents" ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400")}>
+                    {formatMoney(v, currency)}
+                  </span>
                 </div>
                 <div className="mt-1 h-2.5 overflow-hidden rounded-full bg-muted">
                   <div
-                    className={cn(
-                      "h-full rounded-full",
-                      valueKey === "expenseCents" ? "bg-primary" : "bg-emerald-600/80",
-                    )}
+                    className={cn("h-full rounded-full transition-[width]", barClass)}
                     style={{ width: `${pct}%` }}
                   />
                 </div>
@@ -323,20 +335,20 @@ export function DashboardInsights({
                   <button
                     type="button"
                     onClick={() => loadDrill({ lens: "overview", flow: "out" })}
-                    className="rounded-xl border bg-card p-3 text-left ring-offset-background transition hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+                    className="rounded-xl border border-red-200 bg-red-50/60 p-3 text-left ring-offset-background transition hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 dark:border-red-900/40 dark:bg-red-950/20 dark:hover:bg-red-950/30"
                   >
                     <div className="text-[11px] text-muted-foreground">Money out · tap</div>
-                    <div className="mt-1 text-lg font-semibold tabular-nums">
+                    <div className="mt-1 text-lg font-semibold tabular-nums text-red-600 dark:text-red-400">
                       {formatMoney(data.totals.expenseCents, data.displayCurrency)}
                     </div>
                   </button>
                   <button
                     type="button"
                     onClick={() => loadDrill({ lens: "overview", flow: "in" })}
-                    className="rounded-xl border bg-card p-3 text-left ring-offset-background transition hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+                    className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 text-left ring-offset-background transition hover:bg-emerald-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:hover:bg-emerald-950/30"
                   >
                     <div className="text-[11px] text-muted-foreground">Money in · tap</div>
-                    <div className="mt-1 text-lg font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
+                    <div className="mt-1 text-lg font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
                       {formatMoney(data.totals.incomeCents, data.displayCurrency)}
                     </div>
                   </button>

@@ -2,10 +2,8 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  BookOpen,
-  ImagePlus,
+  Camera,
   Loader2,
-  LogOut,
   Mic,
   Paperclip,
   RotateCcw,
@@ -14,8 +12,8 @@ import {
   User,
   Volume2,
 } from "lucide-react";
-import { signOut, useSession } from "next-auth/react";
-import Link from "next/link";
+import { useSession } from "next-auth/react";
+
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   type ClipboardEvent,
@@ -35,10 +33,10 @@ import {
 } from "@/actions/chat";
 import { getPendingConfirmCountAction } from "@/actions/finance";
 import {
-  AdvancedToolsButton,
   AdvancedToolsPanel,
   type AdvancedToolsTabId,
 } from "@/components/chat/advanced-tools-panel";
+import { BottomNav } from "@/components/chat/bottom-nav";
 import { DailySpendCheckinBanner } from "@/components/chat/daily-spend-checkin-banner";
 import { DocumentImportBar } from "@/components/chat/document-import-bar";
 import { LuckyNekoAvatar, LuckyNekoMascot } from "@/components/mascot/lucky-neko";
@@ -550,89 +548,60 @@ export function ChatInterface() {
 
   return (
     <div className="flex min-h-dvh flex-col bg-background">
+      {/* ── Google-style top bar ── */}
       <header className="sticky top-0 z-20 border-b bg-background/80 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-4 py-3">
-          <div className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-amber-50 ring-1 ring-amber-200/80 dark:bg-amber-950/40 dark:ring-amber-800/60">
-            {status === "authenticated" && session?.user?.image ? (
-              <img src={session.user.image} alt="" className="absolute inset-0 h-full w-full object-cover" />
-            ) : (
+        <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-4 py-2">
+          {/* Brand / logo */}
+          <div className="flex flex-1 items-center gap-2.5">
+            <div className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-amber-50 ring-1 ring-amber-200/80 dark:bg-amber-950/40 dark:ring-amber-800/60">
               <LuckyNekoMascot variant="hero" celebrateOnMount className="drop-shadow-sm" />
-            )}
+            </div>
+            <span className="text-base font-semibold tracking-tight">NekoZeni</span>
           </div>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-semibold leading-tight">
-              {status === "authenticated" && session?.user?.name
-                ? session.user.name
-                : status === "authenticated" && session?.user?.email
-                  ? session.user.email.split("@")[0]
-                  : "NekoZeni"}
-            </div>
-            <div className="truncate text-xs text-muted-foreground">
-              {status === "authenticated" && session?.user?.nickname
-                ? `Chat as “${session.user.nickname}” · receipts & payroll docs`
-                : "Lucky-cat treasurer · Chat · PWA"}
-            </div>
+
+          {/* Top-right: new chat + user avatar */}
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9 shrink-0"
+              title="New chat"
+              aria-label="Start new chat"
+              onClick={() => {
+                setMessages(defaultWelcomeMessages());
+                setPackedFinancialSummary("");
+                setPackedThroughIndex(0);
+                chatHydratedKeyRef.current = "";
+                try { localStorage.removeItem(CHAT_DAY_STORAGE_KEY); } catch { /* ignore */ }
+              }}
+            >
+              <RotateCcw className="h-4 w-4" />
+            </Button>
+
+            {/* User avatar — tapping opens profile panel */}
+            <button
+              type="button"
+              id="header-user-avatar"
+              aria-label={t("chat_account_aria")}
+              title={t("chat_account_title")}
+              onClick={() => {
+                setToolsInitialTab("profile");
+                setToolsOpen(true);
+              }}
+              className="relative flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary/10 ring-2 ring-primary/30 transition hover:ring-primary/60 focus-visible:outline-none focus-visible:ring-primary"
+            >
+              {status === "authenticated" && session?.user?.image ? (
+                <img
+                  src={session.user.image}
+                  alt={session.user.name ?? "User avatar"}
+                  className="absolute inset-0 h-full w-full object-cover"
+                />
+              ) : (
+                <User className="h-4 w-4 text-primary" />
+              )}
+            </button>
           </div>
-          {status === "authenticated" && session?.user?.email ? (
-            <div className="flex shrink-0 items-center gap-1 sm:gap-2">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-9 w-9 shrink-0"
-                title="New chat"
-                aria-label="Start new chat"
-                onClick={() => {
-                  setMessages(defaultWelcomeMessages());
-                  setPackedFinancialSummary("");
-                  setPackedThroughIndex(0);
-                  chatHydratedKeyRef.current = "";
-                  try { localStorage.removeItem(CHAT_DAY_STORAGE_KEY); } catch { /* ignore */ }
-                }}
-              >
-                <RotateCcw className="h-4 w-4" />
-              </Button>
-              <Button variant="ghost" size="icon" className="hidden h-9 w-9 shrink-0 sm:inline-flex" asChild title={t("guide_link_label")}>
-                <Link href="/guide" aria-label={t("guide_link_aria")}>
-                  <BookOpen className="h-4 w-4" />
-                </Link>
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-9 w-9 shrink-0"
-                title={t("chat_account_title")}
-                aria-label={t("chat_account_aria")}
-                onClick={() => {
-                  setToolsInitialTab("profile");
-                  setToolsOpen(true);
-                }}
-              >
-                <User className="h-4 w-4" />
-              </Button>
-              <AdvancedToolsButton
-                pendingCount={pendingConfirmCount}
-                onClick={() => {
-                  setToolsInitialTab("dashboard");
-                  setToolsOpen(true);
-                }}
-              />
-              <span className="hidden max-w-[11rem] truncate text-xs text-muted-foreground sm:inline">
-                {session.user.email}
-              </span>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="hidden gap-1.5 px-2 sm:inline-flex sm:px-3"
-                onClick={() => void signOut({ callbackUrl: "/login" })}
-              >
-                <LogOut className="h-4 w-4" />
-                <span className="hidden sm:inline">Sign out</span>
-              </Button>
-            </div>
-          ) : null}
         </div>
       </header>
 
@@ -643,7 +612,7 @@ export function ChatInterface() {
         onBooksChanged={refreshPendingCount}
       />
 
-      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-[calc(5.75rem+env(safe-area-inset-bottom))] pt-4">
+      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-4">
         <ScrollArea className="min-h-[calc(100dvh-8.25rem)] pr-2">
           <div className="space-y-3 pb-4">
             <AnimatePresence initial={false}>
@@ -747,46 +716,49 @@ export function ChatInterface() {
         </ScrollArea>
       </main>
 
-      <div className="fixed inset-x-0 bottom-0 z-30 border-t bg-background/90 backdrop-blur supports-[backdrop-filter]:bg-background/70">
-        <div className="mx-auto w-full max-w-3xl px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3">
-          <AnimatePresence>
-            {spendCheckinVisible ? (
-              <DailySpendCheckinBanner
-                key="daily-spend-checkin"
-                onLogSpending={handleDailySpendLog}
-                onDismiss={acknowledgeSpendCheckin}
-              />
+      {/* ── Fixed composer + bottom nav ── */}
+      <div className="fixed inset-x-0 bottom-0 z-30 flex flex-col">
+        {/* Composer bar */}
+        <div className="border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+          <div className="mx-auto w-full max-w-3xl px-3 pt-2 pb-1">
+            <AnimatePresence>
+              {spendCheckinVisible ? (
+                <DailySpendCheckinBanner
+                  key="daily-spend-checkin"
+                  onLogSpending={handleDailySpendLog}
+                  onDismiss={acknowledgeSpendCheckin}
+                />
+              ) : null}
+            </AnimatePresence>
+            {pendingDocumentImport ? (
+              <div className="mb-2">
+                <DocumentImportBar
+                  pending={pendingDocumentImport}
+                  onResolved={(msg) => {
+                    setMessages((prev) => [...prev, { id: randomId(), role: "assistant", content: msg }]);
+                    refreshPendingCount();
+                  }}
+                  onDismiss={() => setPendingDocumentImport(null)}
+                />
+              </div>
             ) : null}
-          </AnimatePresence>
-          {pendingDocumentImport ? (
-            <div className="mb-3">
-              <DocumentImportBar
-                pending={pendingDocumentImport}
-                onResolved={(msg) => {
-                  setMessages((prev) => [...prev, { id: randomId(), role: "assistant", content: msg }]);
-                  refreshPendingCount();
-                }}
-                onDismiss={() => setPendingDocumentImport(null)}
-              />
-            </div>
-          ) : null}
-          {files.length > 0 ? (
-            <div className="mb-2 flex flex-wrap gap-2">
-              {files.map((file, idx) => (
-                <button
-                  key={`${file.name}-${idx}`}
-                  type="button"
-                  onClick={() => removeFileAt(idx)}
-                  className="max-w-full truncate rounded-full border bg-secondary px-3 py-1 text-xs text-secondary-foreground hover:bg-secondary/80"
-                  title="Remove attachment"
-                >
-                  {file.name}
-                </button>
-              ))}
-            </div>
-          ) : null}
+            {files.length > 0 ? (
+              <div className="mb-1.5 flex flex-wrap gap-1.5">
+                {files.map((file, idx) => (
+                  <button
+                    key={`${file.name}-${idx}`}
+                    type="button"
+                    onClick={() => removeFileAt(idx)}
+                    className="max-w-full truncate rounded-full border bg-secondary px-3 py-1 text-xs text-secondary-foreground hover:bg-secondary/80"
+                    title="Remove attachment"
+                  >
+                    {file.name}
+                  </button>
+                ))}
+              </div>
+            ) : null}
 
-          <div className="flex items-end gap-2">
+            {/* Hidden file input */}
             <input
               ref={fileInputRef}
               type="file"
@@ -799,94 +771,124 @@ export function ChatInterface() {
               }}
             />
 
-            <Button
-              type="button"
-              variant="outline"
-              className="shrink-0 gap-2 px-3"
-              onClick={() => fileInputRef.current?.click()}
-              aria-label="Upload images or PDFs"
-              title="Upload"
-            >
-              <ImagePlus className="h-5 w-5" />
-              <span className="hidden text-sm sm:inline">Upload</span>
-            </Button>
+            {/* ── Google-style pill input ── */}
+            <div className="flex items-end gap-2 rounded-2xl border bg-muted/40 px-2 py-1.5 shadow-sm ring-1 ring-transparent transition-all focus-within:bg-background focus-within:ring-primary/40">
+              {/* Attach button — left inside pill */}
+              <button
+                type="button"
+                id="composer-attach"
+                onClick={() => fileInputRef.current?.click()}
+                aria-label="Attach image or PDF"
+                title="Attach"
+                className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
+              >
+                <Paperclip className="h-5 w-5" />
+              </button>
 
-            {status === "authenticated" ? (
-              voice.mode === "off" ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="shrink-0 px-3"
-                  onClick={() => voice.startVoice()}
-                  disabled={!voice.supported || chatBusy || files.length > 0}
-                  aria-label={t("voice_start_aria")}
-                  title={
-                    !voice.supported
-                      ? t("voice_unsupported_hint")
-                      : files.length > 0
-                        ? t("voice_blocked_attachments")
-                        : t("voice_start_title")
+              {/* Text input — grows */}
+              <Textarea
+                ref={textareaRef}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onPaste={onPasteComposer}
+                placeholder="Message NekoZeni…"
+                className="min-h-[40px] flex-1 resize-none border-0 bg-transparent px-0 py-1 text-sm shadow-none outline-none focus-visible:ring-0"
+                rows={1}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    submit();
                   }
-                >
-                  <Mic className="h-5 w-5" />
-                  <span className="hidden text-sm sm:inline">{t("voice_start_title")}</span>
-                </Button>
-              ) : (
-                <Button
+                }}
+              />
+
+              {/* Right side: camera + mic/stop + send */}
+              <div className="mb-0.5 flex shrink-0 items-center gap-1">
+                {/* Camera — triggers file picker (images only) */}
+                <button
                   type="button"
-                  variant="secondary"
-                  className="shrink-0 gap-1.5 border-destructive/40 px-3 text-destructive hover:bg-destructive/10"
-                  onClick={() => voice.stopConversation()}
-                  aria-label={t("voice_stop_aria")}
-                  title={t("voice_stop_title")}
+                  id="composer-camera"
+                  onClick={() => {
+                    if (!fileInputRef.current) return;
+                    fileInputRef.current.accept = "image/*";
+                    fileInputRef.current.click();
+                    // restore after a tick
+                    setTimeout(() => {
+                      if (fileInputRef.current) fileInputRef.current.accept = "image/*,application/pdf";
+                    }, 500);
+                  }}
+                  aria-label="Attach photo"
+                  title="Attach photo"
+                  className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
                 >
-                  <Square className="h-4 w-4 fill-current" />
-                  <span className="hidden text-sm sm:inline">{t("voice_stop_title")}</span>
-                </Button>
-              )
-            ) : null}
+                  <Camera className="h-5 w-5" />
+                </button>
 
-            <Textarea
-              ref={textareaRef}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onPaste={onPasteComposer}
-              placeholder="Message NekoZeni…"
-              className="min-h-[44px] flex-1"
-              rows={2}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  submit();
-                }
-              }}
-            />
+                {/* Mic / Stop voice */}
+                {status === "authenticated" ? (
+                  voice.mode === "off" ? (
+                    <button
+                      type="button"
+                      id="composer-mic"
+                      onClick={() => voice.startVoice()}
+                      disabled={!voice.supported || chatBusy || files.length > 0}
+                      aria-label={t("voice_start_aria")}
+                      title={
+                        !voice.supported
+                          ? t("voice_unsupported_hint")
+                          : files.length > 0
+                            ? t("voice_blocked_attachments")
+                            : t("voice_start_title")
+                      }
+                      className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40"
+                    >
+                      <Mic className="h-5 w-5" />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      id="composer-stop-voice"
+                      onClick={() => voice.stopConversation()}
+                      aria-label={t("voice_stop_aria")}
+                      title={t("voice_stop_title")}
+                      className="flex h-8 w-8 items-center justify-center rounded-full text-destructive transition hover:bg-destructive/10"
+                    >
+                      <Square className="h-4 w-4 fill-current" />
+                    </button>
+                  )
+                ) : null}
 
-            <Button
-              type="button"
-              size="icon"
-              className="shrink-0"
-              onClick={submit}
-              disabled={
-                isPending ||
-                chatBusy ||
-                voice.mode !== "off" ||
-                (!draft.trim() && files.length === 0)
-              }
-              aria-label="Send message"
-              title="Send"
-            >
-              {isPending || chatBusy ? (
-                <Loader2 className="h-5 w-5 animate-spin" />
-              ) : (
-                <SendHorizontal className="h-5 w-5" />
-              )}
-            </Button>
-          </div>
+                {/* Send button — visible when there's content */}
+                <AnimatePresence>
+                  {(draft.trim() || files.length > 0) && voice.mode === "off" ? (
+                    <motion.button
+                      key="send-btn"
+                      initial={{ scale: 0.6, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      exit={{ scale: 0.6, opacity: 0 }}
+                      transition={{ type: "spring", stiffness: 500, damping: 28 }}
+                      type="button"
+                      id="composer-send"
+                      onClick={submit}
+                      disabled={isPending || chatBusy}
+                      aria-label="Send message"
+                      title="Send"
+                      className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:opacity-60"
+                    >
+                      {isPending || chatBusy ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <SendHorizontal className="h-4 w-4" />
+                      )}
+                    </motion.button>
+                  ) : null}
+                </AnimatePresence>
+              </div>
+            </div>
 
-          <div className="mt-2 space-y-1.5 text-[11px] text-muted-foreground">
+            {/* Voice status indicator */}
             {voice.mode !== "off" ? (
-              <div className="space-y-1">
+              <div className="mt-1.5 space-y-0.5 text-[11px]">
                 <div className="flex items-center gap-2 font-medium text-foreground">
                   {voice.mode === "listening" ? (
                     <Mic className="h-3.5 w-3.5 animate-pulse text-amber-600 dark:text-amber-400" />
@@ -904,28 +906,24 @@ export function ChatInterface() {
                   </span>
                 </div>
                 {voice.transcript ? (
-                  <div className="pl-5 text-foreground/80">
-                    &ldquo;{voice.transcript}&rdquo;
-                  </div>
+                  <div className="pl-5 text-foreground/80">&ldquo;{voice.transcript}&rdquo;</div>
                 ) : null}
                 {voice.errorMessage ? (
                   <div className="pl-5 text-destructive">{voice.errorMessage}</div>
                 ) : null}
               </div>
             ) : null}
-            <div className="flex items-center gap-2">
-              <Paperclip className="h-3.5 w-3.5 shrink-0" />
-              <span className="leading-snug">
-                Tip: on phone, install NekoZeni to your home screen first. Then open Photos or Gallery, choose a
-                receipt, tap Share, and if NekoZeni is not in the first row tap More to find it. On desktop, you can
-                also paste a copied screenshot straight into the chat box.
-                {status === "authenticated" && !voice.supported ? (
-                  <> {t("voice_unsupported_hint")}</>
-                ) : null}
-              </span>
-            </div>
           </div>
         </div>
+
+        {/* ── Bottom navigation bar ── */}
+        <BottomNav
+          pendingCount={pendingConfirmCount}
+          onNotificationsClick={() => {
+            setToolsInitialTab("confirm");
+            setToolsOpen(true);
+          }}
+        />
       </div>
     </div>
   );

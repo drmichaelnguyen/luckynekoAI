@@ -1,6 +1,6 @@
 "use client";
 
-import { Download, Loader2, PanelRightClose, Upload, User, Wrench } from "lucide-react";
+import { BarChart2, Download, FileInput, Loader2, PanelRightClose, RefreshCw, Shield, Upload, User, Wallet, Wrench } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 
@@ -10,10 +10,15 @@ import { getLedgerDashboardAction } from "@/actions/dashboard";
 import {
   confirmTransactionAction,
   createWalletAction,
+  deleteRecurrentSeriesAction,
   listPendingTransactionsAction,
+  listRecurrentSeriesAction,
   listWalletsAction,
   rejectPendingTransactionAction,
+  updateRecurrentSeriesAction,
+  type RecurrentSeriesRow,
 } from "@/actions/finance";
+import { parseCadenceInput, type RecurrentCadence } from "@/lib/finance/cadence";
 import { DashboardInsights } from "@/components/chat/dashboard-insights";
 import { ToolsPlansTab } from "@/components/chat/tools-plans-tab";
 import { ToolsProfileTab } from "@/components/chat/tools-profile-tab";
@@ -26,6 +31,7 @@ export type AdvancedToolsTabId =
   | "dashboard"
   | "import"
   | "confirm"
+  | "recurring"
   | "wallets"
   | "plans"
   | "profile"
@@ -52,7 +58,7 @@ export function AdvancedToolsButton({
       type="button"
       variant="outline"
       size="sm"
-      className="relative shrink-0 gap-1.5 px-2 sm:px-3"
+      className="relative h-9 w-9 shrink-0 gap-1.5 px-0 sm:h-auto sm:w-auto sm:px-3"
       onClick={onClick}
       aria-label="Advanced tools"
       title="Advanced tools"
@@ -172,7 +178,7 @@ export function AdvancedToolsPanel({
               Advanced tools
             </h2>
             <p className="text-xs text-muted-foreground">
-              Dashboard · import · confirm · wallets · plans · profile · backup
+              Dashboard · import · confirm · recurring · wallets · plans · profile · backup
             </p>
           </div>
           <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close">
@@ -180,36 +186,42 @@ export function AdvancedToolsPanel({
           </Button>
         </div>
 
-        <div className="flex gap-1 overflow-x-auto border-b px-2 py-2 scrollbar-thin">
+        {/* Tab navigation — icon grid on mobile, compact row on sm+ */}
+        <div className="grid grid-cols-4 gap-px border-b bg-border sm:flex sm:gap-0 sm:bg-transparent sm:border-b">
           {(
             [
-              ["dashboard", "Dashboard"],
-              ["import", "Import"],
-              ["confirm", "Confirm"],
-              ["wallets", "Wallets"],
-              ["plans", "Plans"],
-              ["profile", "Profile"],
-              ["backup", "Backup"],
+              ["dashboard", "Analytics", BarChart2],
+              ["import",    "Import",    FileInput],
+              ["confirm",   "Confirm",   RefreshCw],
+              ["recurring", "Recurring", RefreshCw],
+              ["wallets",   "Wallets",   Wallet],
+              ["plans",     "Plans",     Shield],
+              ["profile",   "Profile",   User],
+              ["backup",    "Backup",    Download],
             ] as const
-          ).map(([id, label]) => (
-            <Button
+          ).map(([id, label, Icon]) => (
+            <button
               key={id}
               type="button"
-              size="sm"
-              variant={tab === id ? "secondary" : "ghost"}
-              className="min-w-0 shrink-0 flex-1 text-xs sm:text-sm"
               onClick={() => setTab(id)}
-              title={id === "profile" ? "Account & profile" : undefined}
-              aria-label={id === "profile" ? "Profile — account information" : undefined}
+              title={label}
+              aria-label={label}
+              aria-pressed={tab === id}
+              className={cn(
+                "relative flex flex-col items-center justify-center gap-1 bg-background py-2.5 px-1 text-[10px] font-medium transition-colors sm:flex-row sm:gap-1.5 sm:px-3 sm:py-2 sm:text-xs",
+                tab === id
+                  ? "text-primary bg-primary/8"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/60",
+              )}
             >
-              {id === "profile" ? <User aria-hidden /> : null}
-              {label}
+              <Icon className="h-4 w-4 shrink-0" strokeWidth={tab === id ? 2.5 : 1.8} />
+              <span className="leading-none">{label}</span>
               {id === "confirm" && pending.length > 0 ? (
-                <span className="ml-1 rounded-full bg-destructive/15 px-1.5 text-[10px] font-medium text-destructive">
-                  {pending.length}
+                <span className="absolute right-1 top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-destructive px-0.5 text-[9px] font-bold text-destructive-foreground sm:static sm:ml-0.5 sm:h-4 sm:min-w-4 sm:text-[10px]">
+                  {pending.length > 9 ? "9+" : pending.length}
                 </span>
               ) : null}
-            </Button>
+            </button>
           ))}
         </div>
 
@@ -297,73 +309,21 @@ export function AdvancedToolsPanel({
               ) : (
                 <ul className="space-y-3">
                   {pending.map((t) => (
-                    <li key={t.id} className="rounded-xl border bg-card p-3 text-xs shadow-sm">
-                      <div className="font-medium text-foreground">
-                        {formatMoney(t.amountCents, t.currency)} {t.direction === "out" ? "out" : "in"} ·{" "}
-                        {t.walletName}
-                      </div>
-                      <div className="mt-1 text-muted-foreground">
-                        {(t.merchant || t.memo || "No description") + ` · ${t.categoryName}`}
-                      </div>
-                      {t.confirmReason ? (
-                        <div className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-[11px] text-amber-950 dark:bg-amber-950/40 dark:text-amber-100">
-                          {t.confirmReason}
-                        </div>
-                      ) : null}
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="secondary"
-                          disabled={isPending}
-                          onClick={() => {
-                            startTransition(() => {
-                              void (async () => {
-                                await confirmTransactionAction(t.id, "one_time");
-                                refresh();
-                              })();
-                            });
-                          }}
-                        >
-                          One-time
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          disabled={isPending}
-                          onClick={() => {
-                            startTransition(() => {
-                              void (async () => {
-                                await confirmTransactionAction(t.id, "start_recurring_monthly");
-                                refresh();
-                              })();
-                            });
-                          }}
-                        >
-                          Repeats monthly
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          disabled={isPending}
-                          onClick={() => {
-                            startTransition(() => {
-                              void (async () => {
-                                await rejectPendingTransactionAction(t.id);
-                                refresh();
-                              })();
-                            });
-                          }}
-                        >
-                          Dismiss
-                        </Button>
-                      </div>
-                    </li>
+                    <PendingConfirmRow
+                      key={t.id}
+                      item={t}
+                      isPending={isPending}
+                      onRefresh={refresh}
+                      startTransition={startTransition}
+                    />
                   ))}
                 </ul>
               )}
             </div>
+          ) : null}
+
+          {tab === "recurring" ? (
+            <RecurringTab active={tab === "recurring"} onChanged={refresh} />
           ) : null}
 
           {tab === "wallets" ? (
@@ -582,5 +542,365 @@ export function AdvancedToolsPanel({
         </div>
       </div>
     </div>
+  );
+}
+
+type PendingRow = {
+  id: string;
+  amountCents: number;
+  direction: string;
+  currency: string;
+  merchant: string | null;
+  memo: string | null;
+  occurredAt: string;
+  recurrence: string;
+  confirmReason: string | null;
+  walletName: string;
+  categoryName: string;
+};
+
+const CADENCE_CHOICES: { value: RecurrentCadence | "custom"; label: string }[] = [
+  { value: "weekly", label: "Weekly" },
+  { value: "monthly", label: "Monthly" },
+  { value: "yearly", label: "Yearly" },
+  { value: "custom", label: "Custom…" },
+];
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+function toDateInput(iso: string): string {
+  return iso.slice(0, 10);
+}
+
+function addDays(iso: string, days: number): string {
+  const d = new Date(iso);
+  d.setTime(d.getTime() + days * MS_PER_DAY);
+  return d.toISOString().slice(0, 10);
+}
+
+function defaultNextDateFor(anchorIso: string, cadence: RecurrentCadence): string {
+  const days = cadence === "weekly" ? 7 : cadence === "yearly" ? 365 : 30;
+  return addDays(anchorIso, days);
+}
+
+function PendingConfirmRow({
+  item,
+  isPending,
+  onRefresh,
+  startTransition,
+}: {
+  item: PendingRow;
+  isPending: boolean;
+  onRefresh: () => void;
+  startTransition: (fn: () => void) => void;
+}) {
+  const [repeats, setRepeats] = useState<"one_time" | RecurrentCadence | "custom">("one_time");
+  const [customText, setCustomText] = useState("");
+  const [nextDate, setNextDate] = useState<string>(() =>
+    defaultNextDateFor(item.occurredAt, "monthly"),
+  );
+
+  function selectRepeats(next: "one_time" | RecurrentCadence | "custom") {
+    setRepeats(next);
+    if (next === "one_time" || next === "custom") return;
+    setNextDate(defaultNextDateFor(item.occurredAt, next));
+  }
+
+  function confirm() {
+    startTransition(() => {
+      void (async () => {
+        if (repeats === "one_time") {
+          await confirmTransactionAction(item.id, { kind: "one_time" });
+        } else if (repeats === "custom") {
+          const parsed = parseCadenceInput(customText);
+          await confirmTransactionAction(item.id, {
+            kind: "recurring",
+            cadence: parsed.cadence,
+            customCadence: parsed.customCadence,
+            nextReminderAt: nextDate || null,
+          });
+        } else {
+          await confirmTransactionAction(item.id, {
+            kind: "recurring",
+            cadence: repeats,
+            customCadence: null,
+            nextReminderAt: nextDate || null,
+          });
+        }
+        onRefresh();
+      })();
+    });
+  }
+
+  return (
+    <li className="rounded-xl border bg-card p-3 text-xs shadow-sm">
+      <div className="font-medium text-foreground">
+        {formatMoney(item.amountCents, item.currency)}{" "}
+        {item.direction === "out" ? "out" : "in"} · {item.walletName}
+      </div>
+      <div className="mt-1 text-muted-foreground">
+        {(item.merchant || item.memo || "No description") + ` · ${item.categoryName}`}
+      </div>
+      {item.confirmReason ? (
+        <div className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-[11px] text-amber-950 dark:bg-amber-950/40 dark:text-amber-100">
+          {item.confirmReason}
+        </div>
+      ) : null}
+
+      <fieldset className="mt-3 space-y-2">
+        <legend className="text-[11px] font-medium text-foreground">How often does this repeat?</legend>
+        <div className="flex flex-wrap gap-1.5">
+          <Button
+            type="button"
+            size="sm"
+            variant={repeats === "one_time" ? "secondary" : "outline"}
+            onClick={() => selectRepeats("one_time")}
+            className="h-7 px-2 text-[11px]"
+          >
+            One-time
+          </Button>
+          {CADENCE_CHOICES.map((c) => (
+            <Button
+              key={c.value}
+              type="button"
+              size="sm"
+              variant={repeats === c.value ? "secondary" : "outline"}
+              onClick={() => selectRepeats(c.value)}
+              className="h-7 px-2 text-[11px]"
+            >
+              {c.label}
+            </Button>
+          ))}
+        </div>
+        {repeats === "custom" ? (
+          <Input
+            value={customText}
+            onChange={(e) => setCustomText(e.target.value)}
+            placeholder='e.g. "every 2 weeks", "quarterly", "every 15th"'
+            className="h-8 text-xs"
+          />
+        ) : null}
+        {repeats !== "one_time" ? (
+          <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            Next reminder
+            <Input
+              type="date"
+              value={toDateInput(nextDate)}
+              onChange={(e) => setNextDate(e.target.value)}
+              className="h-8 w-auto text-xs"
+            />
+          </label>
+        ) : null}
+      </fieldset>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button
+          type="button"
+          size="sm"
+          disabled={isPending || (repeats === "custom" && !customText.trim())}
+          onClick={confirm}
+        >
+          {repeats === "one_time" ? "Confirm one-time" : "Confirm recurring"}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={isPending}
+          onClick={() => {
+            startTransition(() => {
+              void (async () => {
+                await rejectPendingTransactionAction(item.id);
+                onRefresh();
+              })();
+            });
+          }}
+        >
+          Dismiss
+        </Button>
+      </div>
+    </li>
+  );
+}
+
+function RecurringTab({ active, onChanged }: { active: boolean; onChanged?: () => void }) {
+  const [rows, setRows] = useState<RecurrentSeriesRow[]>([]);
+  const [isPending, startTransition] = useTransition();
+
+  const load = useCallback(() => {
+    void listRecurrentSeriesAction().then((r) => {
+      if (r.ok) setRows(r.rows);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!active) return;
+    load();
+  }, [active, load]);
+
+  if (!active) return null;
+
+  return (
+    <div className="space-y-3 text-sm">
+      <p className="text-xs text-muted-foreground">
+        Edit cadence, custom description, next reminder, or pause a series. The chat model and reminders respect
+        these settings.
+      </p>
+      {rows.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No recurring series yet.</p>
+      ) : (
+        <ul className="space-y-3">
+          {rows.map((r) => (
+            <RecurringSeriesEditor
+              key={r.id}
+              row={r}
+              isPending={isPending}
+              onChanged={() => {
+                load();
+                onChanged?.();
+              }}
+              startTransition={startTransition}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function RecurringSeriesEditor({
+  row,
+  isPending,
+  onChanged,
+  startTransition,
+}: {
+  row: RecurrentSeriesRow;
+  isPending: boolean;
+  onChanged: () => void;
+  startTransition: (fn: () => void) => void;
+}) {
+  const [cadence, setCadence] = useState<RecurrentCadence>(row.cadence);
+  const [customCadence, setCustomCadence] = useState<string>(row.customCadence ?? "");
+  const [nextDate, setNextDate] = useState<string>(
+    row.nextReminderAt ? row.nextReminderAt.slice(0, 10) : "",
+  );
+  const [label, setLabel] = useState<string>(row.label);
+
+  const dirty =
+    cadence !== row.cadence ||
+    (customCadence || "") !== (row.customCadence ?? "") ||
+    nextDate !== (row.nextReminderAt?.slice(0, 10) ?? "") ||
+    label !== row.label;
+
+  function save() {
+    startTransition(() => {
+      void (async () => {
+        await updateRecurrentSeriesAction(row.id, {
+          label,
+          cadence,
+          customCadence: cadence === "irregular" ? customCadence : customCadence || null,
+          nextReminderAt: nextDate ? nextDate : null,
+        });
+        onChanged();
+      })();
+    });
+  }
+
+  return (
+    <li className="rounded-xl border bg-card p-3 text-xs shadow-sm">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <Input
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            className="h-7 text-xs font-medium"
+          />
+          <div className="mt-1 text-[11px] text-muted-foreground">
+            {formatMoney(row.amountCents, row.currency)} {row.direction === "out" ? "out" : "in"} ·{" "}
+            {row.walletName} · {row.categoryName}
+            {row.isPaused ? " · paused" : ""}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <label className="text-[11px] font-medium">
+          Cadence
+          <select
+            className="mt-1 flex h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+            value={cadence}
+            onChange={(e) => setCadence(e.target.value as RecurrentCadence)}
+          >
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+            <option value="yearly">Yearly</option>
+            <option value="irregular">Irregular / custom</option>
+          </select>
+        </label>
+        <label className="text-[11px] font-medium">
+          Next reminder
+          <Input
+            type="date"
+            value={nextDate}
+            onChange={(e) => setNextDate(e.target.value)}
+            className="mt-1 h-8 text-xs"
+          />
+        </label>
+      </div>
+
+      <label className="mt-2 block text-[11px] font-medium">
+        Custom description {cadence !== "irregular" ? "(optional)" : "(required for irregular)"}
+        <Input
+          value={customCadence}
+          onChange={(e) => setCustomCadence(e.target.value)}
+          placeholder='e.g. "every 2 weeks", "15th of each month"'
+          className="mt-1 h-8 text-xs"
+        />
+      </label>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button
+          type="button"
+          size="sm"
+          disabled={isPending || !dirty || (cadence === "irregular" && !customCadence.trim())}
+          onClick={save}
+        >
+          Save
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={isPending}
+          onClick={() => {
+            startTransition(() => {
+              void (async () => {
+                await updateRecurrentSeriesAction(row.id, { isPaused: !row.isPaused });
+                onChanged();
+              })();
+            });
+          }}
+        >
+          {row.isPaused ? "Resume" : "Pause"}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="text-destructive"
+          disabled={isPending}
+          onClick={() => {
+            startTransition(() => {
+              void (async () => {
+                await deleteRecurrentSeriesAction(row.id);
+                onChanged();
+              })();
+            });
+          }}
+        >
+          Delete
+        </Button>
+      </div>
+    </li>
   );
 }
