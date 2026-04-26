@@ -4,6 +4,8 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { z } from "zod";
 
 import { auth } from "@/auth";
+import { call9RouterChatCompletion, has9RouterConfig } from "@/lib/ai/9router";
+import { chooseStructuredTextPrimary, orderedProviders, parseModelJson } from "@/lib/ai/model-router";
 import { findOrCreateCategory } from "@/lib/finance/category-resolver";
 import { persistTransactionListLedgerEntries } from "@/lib/finance/persist-from-chat";
 import { persistPaystubLedgerEntry, persistReceiptLedgerEntry } from "@/lib/finance/persist-receipt-paystub";
@@ -41,20 +43,22 @@ async function mergeProposedWithUserCorrections(input: {
   correctionText: string;
 }): Promise<Record<string, unknown>> {
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-  if (!apiKey) {
+  if (!apiKey && !has9RouterConfig()) {
     return input.proposed;
   }
 
   const modelName = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: modelName,
-    systemInstruction: `You apply a user's correction instructions to structured financial extraction JSON.
+  const systemInstruction = `You apply a user's correction instructions to structured financial extraction JSON.
 Return JSON only (no markdown) with exactly one of these keys populated to match the document kind:
 { "receipt": object } OR { "paystub": object }
-Use the same field names and types as the input object. Preserve fields the user did not dispute. Do not invent merchants or totals the user did not supply.`,
-    generationConfig: { temperature: 0.1, responseMimeType: "application/json" },
-  });
+Use the same field names and types as the input object. Preserve fields the user did not dispute. Do not invent merchants or totals the user did not supply.`;
+  const model = apiKey
+    ? new GoogleGenerativeAI(apiKey).getGenerativeModel({
+        model: modelName,
+        systemInstruction,
+        generationConfig: { temperature: 0.1, responseMimeType: "application/json" },
+      })
+    : null;
 
   const prompt = `Document kind: ${input.documentKind}
 
@@ -70,11 +74,30 @@ ${input.correctionText}
 Return only valid JSON with a single top-level key "receipt" or "paystub" matching document kind.`;
 
   try {
-    const result = await model.generateContent(prompt);
-    const raw = result.response.text();
-    const json = JSON.parse(raw) as unknown;
-    const parsed = MergeSchema.safeParse(json);
-    if (!parsed.success) return input.proposed;
+    let parsed: z.SafeParseReturnType<unknown, z.infer<typeof MergeSchema>> | null = null;
+    const providerOrder = orderedProviders({
+      preferred: chooseStructuredTextPrimary({ nineRouterAvailable: has9RouterConfig() }),
+      geminiAvailable: Boolean(model),
+      nineRouterAvailable: has9RouterConfig(),
+    });
+
+    for (const provider of providerOrder) {
+      try {
+        const raw =
+          provider === "gemini"
+            ? (await model!.generateContent(prompt)).response.text()
+            : await call9RouterChatCompletion({
+                systemInstruction,
+                userPrompt: prompt,
+                temperature: 0.1,
+              });
+        parsed = MergeSchema.safeParse(parseModelJson(raw));
+        if (parsed.success) break;
+      } catch {
+        parsed = null;
+      }
+    }
+    if (!parsed?.success) return input.proposed;
     if (input.documentKind === "receipt" && parsed.data.receipt && typeof parsed.data.receipt === "object") {
       return parsed.data.receipt;
     }

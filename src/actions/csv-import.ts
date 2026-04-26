@@ -4,7 +4,10 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { z } from "zod";
 
 import { auth } from "@/auth";
+import { call9RouterChatCompletion, has9RouterConfig } from "@/lib/ai/9router";
+import { chooseStructuredTextPrimary, orderedProviders, parseModelJson } from "@/lib/ai/model-router";
 import { parseCsvTable } from "@/lib/csv-parse";
+import { findOrCreateCategory } from "@/lib/finance/category-resolver";
 import { financeContextLines, ensureFinanceSeed } from "@/lib/finance/seed";
 import { slugify } from "@/lib/finance/slug";
 import { prisma } from "@/lib/prisma";
@@ -29,7 +32,46 @@ const CsvMapResponseSchema = z.object({
   summary: z.string().optional(),
 });
 
-const MAX_CSV_PREVIEW_ROWS = 80;
+const CSV_CHUNK_ROWS = 80;
+const REFUND_TEXT_RE = /\b(refund|refunded|reimbursement|reimburse|return|returned|cashback|pay\s*back|paid\s*back)\b/i;
+
+function headerIndex(headers: string[], name: string): number {
+  return headers.findIndex((header) => header.trim().toLowerCase() === name.toLowerCase());
+}
+
+function cellByHeader(headers: string[], row: string[], name: string): string {
+  const index = headerIndex(headers, name);
+  return index >= 0 ? String(row[index] ?? "").trim() : "";
+}
+
+function normalizeSourceCategory(label: string): string | null {
+  const cleaned = label.trim();
+  if (!cleaned) return null;
+  const lowered = cleaned.toLowerCase();
+  if (lowered.includes("apex dental") || lowered === "dental") return "Health > Dental";
+  if (lowered.includes("prenuvo")) return "Health";
+  if (lowered.includes("other income")) return "Income > Other income";
+  if (lowered.includes("debt collection")) return "Income > Other income";
+  return cleaned;
+}
+
+function sourceCategoryOverride(input: {
+  headers: string[];
+  sourceRow: string[];
+  mappedCategoryName?: string | null;
+}): string | null {
+  const sourceCategory = normalizeSourceCategory(cellByHeader(input.headers, input.sourceRow, "Category"));
+  if (!sourceCategory) return null;
+
+  const note = cellByHeader(input.headers, input.sourceRow, "Note");
+  const category = cellByHeader(input.headers, input.sourceRow, "Category");
+  const event = cellByHeader(input.headers, input.sourceRow, "Event");
+  const mapped = input.mappedCategoryName ?? "";
+  const explicitRefund = REFUND_TEXT_RE.test(`${note} ${category} ${event}`);
+
+  if (/refund/i.test(mapped) && !explicitRefund) return sourceCategory;
+  return null;
+}
 
 export type CsvImportResult =
   | { ok: true; imported: number; pending: number; summary: string }
@@ -40,7 +82,9 @@ export async function importCsvWithLlmAction(formData: FormData): Promise<CsvImp
   if (!session?.user?.id) return { ok: false, error: "Unauthorized." };
 
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-  if (!apiKey) return { ok: false, error: "Missing GOOGLE_GENERATIVE_AI_API_KEY." };
+  if (!apiKey && !has9RouterConfig()) {
+    return { ok: false, error: "Missing GOOGLE_GENERATIVE_AI_API_KEY or NINE_ROUTER_API_KEY." };
+  }
 
   const file = formData.get("file");
   let text = String(formData.get("csvText") ?? "").trim();
@@ -55,22 +99,11 @@ export async function importCsvWithLlmAction(formData: FormData): Promise<CsvImp
     return { ok: false, error: "Could not read headers or data rows from CSV." };
   }
 
-  const slice = rows.slice(0, MAX_CSV_PREVIEW_ROWS);
   await ensureFinanceSeed(prisma, session.user.id);
   const ctx = await financeContextLines(prisma, session.user.id);
 
-  const preview = [
-    `HEADERS: ${headers.join(" | ")}`,
-    "",
-    "ROWS (0-based index after header):",
-    ...slice.map((r, i) => `${i}: ${r.join(" | ")}`),
-  ].join("\n");
-
   const modelName = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: modelName,
-    systemInstruction: `You map messy export CSV rows into structured ledger lines for NekoZeni.
+  const baseSystemInstruction = `You map messy export CSV rows into structured ledger lines for NekoZeni.
 ${ctx}
 
 Return JSON ONLY:
@@ -97,21 +130,91 @@ Return JSON ONLY:
 Rules:
 - Guess column meanings from headers + cell content (date, description, debit/credit, amount).
 - Use direction "out" for spending, "in" for income/deposits/refunds as appropriate.
+- If the CSV has a Category column, preserve that category unless the note/category text clearly says it is a refund, return, reimbursement, cashback, or payback.
+- Do not categorize a positive amount as "Income > Refund" just because it is positive. Use "Refund" only when the source text explicitly indicates a refund/return/reimbursement/payback.
 - If a row looks like rent, loan payment, subscription, or utility bill, set recurrence "recurrent" and needsUserConfirm true with a short confirmReason.
-- rowIndex MUST refer only to rows provided in the preview (0 .. ${Math.max(0, slice.length - 1)}).
-- Skip header lines and completely blank rows.`,
-    generationConfig: { temperature: 0.1, responseMimeType: "application/json" },
-  });
+- rowIndex MUST be the exact source row index shown in the preview.
+- Skip header lines and completely blank rows.`;
+  const model = apiKey
+    ? new GoogleGenerativeAI(apiKey).getGenerativeModel({
+        model: modelName,
+        systemInstruction: baseSystemInstruction,
+        generationConfig: { temperature: 0.1, responseMimeType: "application/json" },
+      })
+    : null;
 
   try {
-    const result = await model.generateContent([
-      { text: "CSV PREVIEW:\n\n" + preview + "\n\nReturn JSON as specified." },
-    ]);
-    const raw = result.response.text();
-    const json = JSON.parse(raw) as unknown;
-    const parsed = CsvMapResponseSchema.safeParse(json);
-    if (!parsed.success) {
-      return { ok: false, error: "Model returned an unexpected CSV map format." };
+    const providerOrder = orderedProviders({
+      preferred: chooseStructuredTextPrimary({ nineRouterAvailable: has9RouterConfig() }),
+      geminiAvailable: Boolean(model),
+      nineRouterAvailable: has9RouterConfig(),
+    });
+    type MappedCsvRow = z.infer<typeof CsvRowSchema> & {
+      modelProvider: (typeof providerOrder)[number];
+      modelProviderOrder: string[];
+      chunkStartRowIndex: number;
+      chunkEndRowIndex: number;
+    };
+    const mappedRows: MappedCsvRow[] = [];
+    const chunkSummaries: string[] = [];
+
+    for (let chunkStart = 0; chunkStart < rows.length; chunkStart += CSV_CHUNK_ROWS) {
+      const chunk = rows.slice(chunkStart, chunkStart + CSV_CHUNK_ROWS);
+      const chunkEnd = chunkStart + chunk.length - 1;
+      const preview = [
+        `HEADERS: ${headers.join(" | ")}`,
+        "",
+        `ROWS (0-based source row index after header, this chunk is ${chunkStart}..${chunkEnd}):`,
+        ...chunk.map((r, i) => `${chunkStart + i}: ${r.join(" | ")}`),
+      ].join("\n");
+      const systemInstruction = `${baseSystemInstruction}
+- For this request, rowIndex MUST be between ${chunkStart} and ${chunkEnd}.`;
+      const userPrompt = "CSV PREVIEW:\n\n" + preview + "\n\nReturn JSON as specified.";
+      let parsed: z.SafeParseReturnType<unknown, z.infer<typeof CsvMapResponseSchema>> | null = null;
+      let lastModelError: unknown = null;
+      let usedProvider: (typeof providerOrder)[number] | null = null;
+
+      for (const provider of providerOrder) {
+        try {
+          const raw =
+            provider === "gemini"
+              ? (await model!.generateContent([{ text: userPrompt }])).response.text()
+              : await call9RouterChatCompletion({
+                  systemInstruction,
+                  userPrompt,
+                  temperature: 0.1,
+                });
+          parsed = CsvMapResponseSchema.safeParse(parseModelJson(raw));
+          if (parsed.success) {
+            usedProvider = provider;
+            break;
+          }
+        } catch (e) {
+          lastModelError = e;
+        }
+      }
+
+      if (!parsed?.success || !usedProvider) {
+        const message = lastModelError instanceof Error ? lastModelError.message : null;
+        return {
+          ok: false,
+          error:
+            message ||
+            `Model returned invalid JSON or an unexpected CSV map format for source rows ${chunkStart}-${chunkEnd}.`,
+        };
+      }
+
+      for (const row of parsed.data.rows) {
+        if (row.rowIndex < chunkStart || row.rowIndex > chunkEnd) continue;
+        mappedRows.push({
+          ...row,
+          modelProvider: usedProvider,
+          modelProviderOrder: providerOrder,
+          chunkStartRowIndex: chunkStart,
+          chunkEndRowIndex: chunkEnd,
+        });
+      }
+      if (parsed.data.summary) chunkSummaries.push(parsed.data.summary);
     }
 
     const wallets = await prisma.wallet.findMany({
@@ -126,7 +229,7 @@ Rules:
       data: {
         userId: session.user.id,
         label: `CSV import ${new Date().toISOString().slice(0, 10)}`,
-        rowCount: parsed.data.rows.length,
+        rowCount: rows.length,
         status: "completed",
       },
     });
@@ -134,8 +237,8 @@ Rules:
     let pending = 0;
     let imported = 0;
 
-    for (const row of parsed.data.rows) {
-      if (row.rowIndex < 0 || row.rowIndex >= slice.length) continue;
+    for (const row of mappedRows) {
+      if (row.rowIndex < 0 || row.rowIndex >= rows.length) continue;
       const amountCents = Math.round(Math.abs(row.amount) * 100);
       if (amountCents <= 0) continue;
 
@@ -147,15 +250,34 @@ Rules:
         if (hit) wallet = hit;
       }
 
+      const sourceRow = rows[row.rowIndex];
+      const categoryOverride = sourceCategoryOverride({
+        headers,
+        sourceRow,
+        mappedCategoryName: row.categoryName,
+      });
+      const categoryLabel = categoryOverride ?? row.categoryName;
       const other = categories.find((c) => c.slug === "other");
       let categoryId: string | null = other?.id ?? null;
-      if (row.categoryName) {
+      if (categoryLabel) {
         const hit = categories.find(
           (c) =>
-            c.name.toLowerCase() === row.categoryName!.toLowerCase() ||
-            c.slug === slugify(row.categoryName!),
+            c.name.toLowerCase() === categoryLabel.toLowerCase() ||
+            c.slug === slugify(categoryLabel),
         );
-        if (hit) categoryId = hit.id;
+        if (hit) {
+          categoryId = hit.id;
+        } else {
+          const created = await findOrCreateCategory({
+            db: prisma,
+            userId: session.user.id,
+            label: categoryLabel,
+            direction: row.direction,
+            kindHint: categoryOverride ? "expense" : undefined,
+            fallbackSlug: row.direction === "in" ? "income" : "other",
+          });
+          categoryId = created?.id ?? categoryId;
+        }
       }
 
       const recurrence = row.recurrence === "recurrent" ? "recurrent" : "one_time";
@@ -182,7 +304,39 @@ Rules:
           confirmReason: row.confirmReason ?? (needs ? "Confirm in Tools (recurring bill?)" : null),
           source: "csv_import",
           importBatchId: batch.id,
-          rawStructuredJson: JSON.stringify(row),
+          rawStructuredJson: JSON.stringify({
+            source: {
+              type: "csv_import",
+              importBatchId: batch.id,
+              sourceRowIndex: row.rowIndex,
+              sourceHeaders: headers,
+              sourceRow: rows[row.rowIndex],
+              chunkStartRowIndex: row.chunkStartRowIndex,
+              chunkEndRowIndex: row.chunkEndRowIndex,
+              sourceCategoryOverride: categoryOverride,
+            },
+            model: {
+              provider: row.modelProvider,
+              providerOrder: row.modelProviderOrder,
+              geminiModel: modelName,
+              nineRouterModel: process.env.NINE_ROUTER_MODEL?.trim() || "codex-gemini",
+            },
+            mapped: {
+              rowIndex: row.rowIndex,
+              amount: row.amount,
+              currency: row.currency ?? null,
+              direction: row.direction,
+              merchant: row.merchant ?? null,
+              memo: row.memo ?? null,
+              categoryName: row.categoryName ?? null,
+              finalCategoryName: categoryLabel ?? null,
+              walletLabel: row.walletLabel ?? null,
+              occurredAt: row.occurredAt ?? null,
+              recurrence: row.recurrence ?? null,
+              needsUserConfirm: row.needsUserConfirm ?? null,
+              confirmReason: row.confirmReason ?? null,
+            },
+          }),
         },
       });
       imported += 1;
@@ -192,7 +346,10 @@ Rules:
       ok: true,
       imported,
       pending,
-      summary: parsed.data.summary ?? `Imported ${imported} row(s), ${pending} awaiting confirmation.`,
+      summary:
+        chunkSummaries.length > 0
+          ? `Imported ${imported} of ${rows.length} source row(s), ${pending} awaiting confirmation. ${chunkSummaries.join(" ")}`
+          : `Imported ${imported} of ${rows.length} source row(s), ${pending} awaiting confirmation.`,
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "CSV import failed.";

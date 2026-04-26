@@ -6,6 +6,8 @@ import { z } from "zod";
 
 import { PENDING_IMPORT_VERSION } from "@/lib/document-import/pending-import-shared";
 import { auth } from "@/auth";
+import { call9RouterChatCompletion, has9RouterConfig } from "@/lib/ai/9router";
+import { chooseChatPrimary, orderedProviders, parseModelJson } from "@/lib/ai/model-router";
 import { persistFreeformLedgerEntry } from "@/lib/finance/persist-from-chat";
 import { financeContextLines } from "@/lib/finance/seed";
 import {
@@ -435,25 +437,26 @@ export async function handleChatInput(formData: FormData) {
   const financeContext = await financeContextLines(prisma, userId);
 
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-  if (!apiKey) {
+  if (!apiKey && !has9RouterConfig()) {
     return {
       ok: false as const,
       error:
-        "Server is missing GOOGLE_GENERATIVE_AI_API_KEY. Copy .env.example to .env.local and add your key.",
+        "Server is missing GOOGLE_GENERATIVE_AI_API_KEY or NINE_ROUTER_API_KEY. Copy .env.example to .env.local and add a key.",
     };
   }
 
   const modelName = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
 
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: modelName,
-    systemInstruction: SYSTEM_INSTRUCTION,
-    generationConfig: {
-      temperature: 0.15,
-      responseMimeType: "application/json",
-    },
-  });
+  const model = apiKey
+    ? new GoogleGenerativeAI(apiKey).getGenerativeModel({
+        model: modelName,
+        systemInstruction: SYSTEM_INSTRUCTION,
+        generationConfig: {
+          temperature: 0.15,
+          responseMimeType: "application/json",
+        },
+      })
+    : null;
 
   const prompt = buildUserPrompt({
     message,
@@ -549,24 +552,44 @@ export async function handleChatInput(formData: FormData) {
   }
 
   try {
-    const result = await model.generateContent(parts);
-    const rawText = result.response.text();
-    let json: unknown;
-    try {
-      json = JSON.parse(rawText) as unknown;
-    } catch {
-      await rollbackChatUploads();
-      return {
-        ok: false as const,
-        error: "The model returned invalid JSON. Try again.",
-      };
+    let parsed: z.SafeParseReturnType<unknown, z.infer<typeof GeminiResponseSchema>> | null = null;
+    let lastModelError: unknown = null;
+
+    const providerOrder = orderedProviders({
+      preferred: chooseChatPrimary({
+        hasAttachments: preparedAttachments.length > 0,
+        message,
+        hasConversationContext: Boolean(packedFinancialSummary || recentPriorTurns.length > 0),
+        nineRouterAvailable: has9RouterConfig(),
+      }),
+      geminiAvailable: Boolean(model),
+      nineRouterAvailable: has9RouterConfig(),
+    });
+
+    for (const provider of providerOrder) {
+      try {
+        const rawText =
+          provider === "gemini"
+            ? (await model!.generateContent(parts)).response.text()
+            : await call9RouterChatCompletion({
+                systemInstruction: SYSTEM_INSTRUCTION,
+                userPrompt: prompt,
+                temperature: 0.15,
+                attachments: preparedAttachments,
+              });
+        parsed = GeminiResponseSchema.safeParse(parseModelJson(rawText));
+        if (parsed.success) break;
+      } catch (e) {
+        lastModelError = e;
+      }
     }
-    const parsed = GeminiResponseSchema.safeParse(json);
-    if (!parsed.success) {
+
+    if (!parsed?.success) {
       await rollbackChatUploads();
+      const messageText = lastModelError instanceof Error ? lastModelError.message : null;
       return {
         ok: false as const,
-        error: "The model returned an unexpected format. Try again.",
+        error: messageText || "The model returned invalid JSON or an unexpected format. Try again.",
       };
     }
 

@@ -4,6 +4,8 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { z } from "zod";
 
 import { auth } from "@/auth";
+import { call9RouterChatCompletion, has9RouterConfig } from "@/lib/ai/9router";
+import { chooseStructuredTextPrimary, orderedProviders, parseModelJson } from "@/lib/ai/model-router";
 import type { ConversationTurnForApi } from "@/lib/chat/conversation-context";
 
 const PackResponseSchema = z.object({
@@ -56,25 +58,26 @@ export async function packFinancialConversationAction(input: {
   }
 
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-  if (!apiKey) {
+  if (!apiKey && !has9RouterConfig()) {
     return {
       ok: false,
       error:
-        "Server is missing GOOGLE_GENERATIVE_AI_API_KEY. Copy .env.example to .env.local and add your key.",
+        "Server is missing GOOGLE_GENERATIVE_AI_API_KEY or NINE_ROUTER_API_KEY. Copy .env.example to .env.local and add a key.",
     };
   }
 
   const modelName = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
 
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: modelName,
-    systemInstruction: PACK_SYSTEM,
-    generationConfig: {
-      temperature: 0.1,
-      responseMimeType: "application/json",
-    },
-  });
+  const model = apiKey
+    ? new GoogleGenerativeAI(apiKey).getGenerativeModel({
+        model: modelName,
+        systemInstruction: PACK_SYSTEM,
+        generationConfig: {
+          temperature: 0.1,
+          responseMimeType: "application/json",
+        },
+      })
+    : null;
 
   const prior = (input.priorSummary ?? "").trim();
   const segmentText = formatSegment(input.segment);
@@ -84,17 +87,35 @@ export async function packFinancialConversationAction(input: {
       : `NEW SEGMENT TO SUMMARIZE (financial facts only):\n${segmentText}\n\nReturn ONLY valid JSON with "financialSummary".`;
 
   try {
-    const result = await model.generateContent(userPrompt);
-    const rawText = result.response.text();
-    let json: unknown;
-    try {
-      json = JSON.parse(rawText) as unknown;
-    } catch {
-      return { ok: false, error: "Packing model returned invalid JSON. Try sending again." };
+    let parsed: z.SafeParseReturnType<unknown, z.infer<typeof PackResponseSchema>> | null = null;
+    let lastModelError: unknown = null;
+
+    const providerOrder = orderedProviders({
+      preferred: chooseStructuredTextPrimary({ nineRouterAvailable: has9RouterConfig() }),
+      geminiAvailable: Boolean(model),
+      nineRouterAvailable: has9RouterConfig(),
+    });
+
+    for (const provider of providerOrder) {
+      try {
+        const rawText =
+          provider === "gemini"
+            ? (await model!.generateContent(userPrompt)).response.text()
+            : await call9RouterChatCompletion({
+                systemInstruction: PACK_SYSTEM,
+                userPrompt,
+                temperature: 0.1,
+              });
+        parsed = PackResponseSchema.safeParse(parseModelJson(rawText));
+        if (parsed.success) break;
+      } catch (e) {
+        lastModelError = e;
+      }
     }
-    const parsed = PackResponseSchema.safeParse(json);
-    if (!parsed.success) {
-      return { ok: false, error: "Packing model returned an unexpected format." };
+
+    if (!parsed?.success) {
+      const message = lastModelError instanceof Error ? lastModelError.message : null;
+      return { ok: false, error: message || "Packing model returned invalid JSON or an unexpected format." };
     }
     return { ok: true, financialSummary: parsed.data.financialSummary.trim() };
   } catch (e) {

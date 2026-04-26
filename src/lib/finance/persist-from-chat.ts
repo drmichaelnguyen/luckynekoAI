@@ -43,9 +43,10 @@ async function findDuplicateTransaction(args: {
   amountCents: number;
   direction: FlowDirection;
   occurredAt: Date;
+  merchant?: string | null;
 }) {
   const { start, end } = dayBounds(args.occurredAt);
-  return args.db.transaction.findFirst({
+  const candidates = await args.db.transaction.findMany({
     where: {
       userId: args.userId,
       amountCents: args.amountCents,
@@ -63,6 +64,22 @@ async function findDuplicateTransaction(args: {
       currency: true,
     },
   });
+
+  if (candidates.length === 0) return null;
+
+  if (args.merchant) {
+    const incomingLower = args.merchant.toLowerCase();
+    for (const c of candidates) {
+      if (!c.merchant) return c;
+      const existingLower = c.merchant.toLowerCase();
+      if (existingLower.includes(incomingLower) || incomingLower.includes(existingLower)) {
+        return c;
+      }
+    }
+    return null;
+  }
+
+  return candidates[0];
 }
 
 export async function persistFreeformLedgerEntry(
@@ -145,6 +162,7 @@ export async function persistFreeformLedgerEntry(
     amountCents: amountAbsCents,
     direction,
     occurredAt,
+    merchant,
   });
   if (duplicate) {
     return {

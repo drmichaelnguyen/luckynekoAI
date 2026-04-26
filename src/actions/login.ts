@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { z } from "zod";
+import { AuthError } from "next-auth";
 
 import { signIn } from "@/auth";
 
@@ -50,6 +51,11 @@ export async function loginAction(
       return { error: "Wrong email or password." };
     }
   } catch (error) {
+    if (error instanceof AuthError) {
+      if (error.type === "CredentialsSignin") {
+        return { error: "Wrong email or password." };
+      }
+    }
     console.error("[login] signIn failed", error);
     return { error: "Could not sign in right now. Try again." };
   }

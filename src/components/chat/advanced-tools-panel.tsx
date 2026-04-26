@@ -39,8 +39,6 @@ export type AdvancedToolsTabId =
 
 type Tab = AdvancedToolsTabId;
 
-const MAX_CSV_PREVIEW_ROWS = 80;
-
 function formatMoney(cents: number, currency: string) {
   const v = (cents / 100).toFixed(2);
   return `${currency} ${v}`;
@@ -238,8 +236,8 @@ export function AdvancedToolsPanel({
           {tab === "import" ? (
             <div className="space-y-3 text-sm">
               <p className="text-xs leading-relaxed text-muted-foreground">
-                Paste an export from another app (up to {MAX_CSV_PREVIEW_ROWS} data rows). The model guesses columns, assigns a wallet
-                and category, and flags repeating bills for confirmation.
+                Paste an export from another app. Large files are processed in chunks; the model guesses columns, assigns a wallet and
+                category, and flags repeating bills for confirmation.
               </p>
               <Textarea
                 value={csvText}
@@ -275,10 +273,13 @@ export function AdvancedToolsPanel({
                       fd.set("csvText", csvText);
                       const r = await importCsvWithLlmAction(fd);
                       if (r.ok) {
-                        setImportMsg(`${r.summary}\nImported: ${r.imported}. Pending review: ${r.pending}.`);
+                        setImportMsg(
+                          `${r.summary}\nImported: ${r.imported}. Pending review: ${r.pending}.${
+                            r.pending > 0 ? "\nOpen Confirm to review repeating bills." : ""
+                          }`,
+                        );
                         setCsvText("");
                         refresh();
-                        setTab("confirm");
                       } else {
                         setImportMsg(r.error);
                       }
