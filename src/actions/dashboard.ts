@@ -25,6 +25,7 @@ export type LedgerDashboardResult =
       byCategory: Array<{
         categoryId: string | null;
         name: string;
+        icon: string | null;
         expenseCents: number;
         incomeCents: number;
       }>;
@@ -78,7 +79,7 @@ export async function getLedgerDashboardAction(range: DashboardRange): Promise<L
   const [wallets, categories, expenseByCat, incomeByCat, expenseByWallet, incomeByWallet, merchants, txCount, pendingCount] =
     await Promise.all([
       prisma.wallet.findMany({ where: { userId }, select: { id: true, name: true } }),
-      prisma.category.findMany({ where: { userId }, select: { id: true, name: true } }),
+      prisma.category.findMany({ where: { userId }, select: { id: true, name: true, icon: true } }),
       prisma.transaction.groupBy({
         by: ["categoryId"],
         where: { ...baseWhere, direction: "out" },
@@ -116,7 +117,7 @@ export async function getLedgerDashboardAction(range: DashboardRange): Promise<L
       }),
     ]);
 
-  const catMap = new Map(categories.map((c) => [c.id, c.name]));
+  const catMap = new Map(categories.map((c) => [c.id, c]));
   const walletMap = new Map(wallets.map((w) => [w.id, w.name]));
 
   const expenseMap = new Map<string | null, number>();
@@ -129,12 +130,16 @@ export async function getLedgerDashboardAction(range: DashboardRange): Promise<L
   }
 
   const catIds = new Set<string | null>([...expenseMap.keys(), ...incomeMap.keys()]);
-  const byCategory = [...catIds].map((id) => ({
-    categoryId: id,
-    name: id ? (catMap.get(id) ?? "Unknown") : "Uncategorized",
-    expenseCents: expenseMap.get(id) ?? 0,
-    incomeCents: incomeMap.get(id) ?? 0,
-  }));
+  const byCategory = [...catIds].map((id) => {
+    const cat = id ? catMap.get(id) : null;
+    return {
+      categoryId: id,
+      name: cat?.name ?? "Uncategorized",
+      icon: cat?.icon ?? null,
+      expenseCents: expenseMap.get(id) ?? 0,
+      incomeCents: incomeMap.get(id) ?? 0,
+    };
+  });
   byCategory.sort((a, b) => b.expenseCents + b.incomeCents - (a.expenseCents + a.incomeCents));
 
   const wExpense = new Map<string, number>();

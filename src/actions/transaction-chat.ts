@@ -17,6 +17,8 @@ const ResponseSchema = z.object({
     merchant: z.string().nullable().optional(),
     memo: z.string().nullable().optional(),
     dateHint: z.string().nullable().optional(),
+    categoryName: z.string().nullable().optional(),
+    categoryId: z.string().nullable().optional(),
   }).nullable().optional(),
   requiresComplexReasoning: z.boolean().optional(),
 });
@@ -68,7 +70,8 @@ You must return a raw JSON object (and ONLY JSON, no markdown formatting) confor
     "direction": "in" or "out" or null,
     "merchant": string or null,
     "memo": string or null,
-    "dateHint": string or null
+    "dateHint": string or null,
+    "categoryName": string or null
   } | null,
   "requiresComplexReasoning": boolean
 }
@@ -110,6 +113,20 @@ If you are confused by the request and need a larger model, set \`requiresComple
         continue; // Fallback to next model
       }
       
+      if (parsed.proposedEdit && parsed.proposedEdit.categoryName) {
+        const { findOrCreateCategory } = await import("@/lib/finance/category-resolver");
+        const cat = await findOrCreateCategory({
+          db: prisma,
+          userId: session.user.id,
+          label: parsed.proposedEdit.categoryName,
+          direction: tx.direction as "in" | "out",
+          fallbackSlug: tx.direction === "in" ? "income" : "other"
+        });
+        if (cat) {
+          parsed.proposedEdit.categoryId = cat.id;
+        }
+      }
+
       return { ok: true, response: parsed };
     } catch (err: any) {
       console.warn(`transactionMiniChatAction error with model ${model}:`, err);

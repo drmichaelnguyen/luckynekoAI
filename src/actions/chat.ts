@@ -111,6 +111,7 @@ const GeminiResponseSchema = z
         newAmount: z.number().nullable().optional(),
         newMemo: z.string().nullable().optional(),
         newCategory: z.string().nullable().optional(),
+        newMerchant: z.string().nullable().optional(),
       })
       .nullable()
       .optional(),
@@ -167,7 +168,7 @@ Your JSON MUST match this shape (optional keys only when relevant):
   "receiptSplit": null | [{ "description": string, "category": string, "amount": number, "currency": string, "direction": "in"|"out" }],
   "planSuggestion": null | { "title": string, "description": string | null, "amountCents": number | null, "currency": string, "period": "none" | "monthly" | "yearly" },
   "pendingRecurrenceUpdate": null | { "merchantHint": string | null, "cadenceText": string, "nextReminderAt": string | null },
-  "ledgerEdit": null | { "merchantHint": string | null, "dateHint": string | null, "newAmount": number | null, "newMemo": string | null, "newCategory": string | null },
+  "ledgerEdit": null | { "merchantHint": string | null, "dateHint": string | null, "newAmount": number | null, "newMemo": string | null, "newCategory": string | null, "newMerchant": string | null },
   "requiresComplexReasoning": boolean
 }
 
@@ -175,7 +176,7 @@ Rules:
 - If the user asks for complex financial planning, risk analysis, or deep reasoning that you cannot confidently satisfy, set requiresComplexReasoning to true.
 - The user message may include USER PREFERENCES (how to address them in chat) and FINANCIAL PLANS (spending budgets and savings goals). Follow those when giving advice; do not ignore a stated monthly cap or savings target without asking first.
 - Choose exactly one primary extraction target: populate ONLY ONE of transaction/transactionList/receipt/paystub/ledgerEdit; set the others to null.
-- If the user explicitly asks to edit, update, or add a comment/note to a PAST or EXISTING transaction (e.g., "add a note to my Uber ride", "change the amount of my Tim Hortons to $5"), use documentKind "ledger_edit" and populate ledgerEdit with merchantHint, dateHint (if given), newAmount, newMemo, newCategory.
+- If the user explicitly asks to edit, update, change category, change merchant, or add a comment/note to a PAST or EXISTING transaction (e.g., "add a note to my Uber ride", "change the amount of my Tim Hortons to $5", "this should be in tax category", "change merchant to CRA"), use documentKind "ledger_edit" and populate ledgerEdit with merchantHint, dateHint (if given), newAmount, newMemo, newCategory, newMerchant.
 - If the user only typed text describing a purchase, use documentKind "freeform_transaction" and populate transaction.
 - If the uploaded file is a clear retail or service purchase receipt or bill (you can read totals and context), use documentKind "receipt" and populate receipt with structured expense data suitable for database insertion.
 - If the uploaded file is a payroll or payslip document from Canada or Vietnam, use documentKind "payroll_document" and populate paystub with payroll fields suitable for database insertion.

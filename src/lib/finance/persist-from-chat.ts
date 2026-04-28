@@ -261,6 +261,7 @@ export async function applyLedgerEdit(
     newAmount: number | null;
     newMemo: string | null;
     newCategory: string | null;
+    newMerchant?: string | null;
   }
 ): Promise<{ saved: boolean; detail: string; transactionId?: string }> {
   // Try to find the matching transaction.
@@ -324,6 +325,14 @@ export async function applyLedgerEdit(
       dataToUpdate.categoryId = cat.id;
       before.categoryId = targetTx.categoryId;
       after.categoryId = cat.id;
+    }
+  }
+
+  if (edit.newMerchant !== undefined && edit.newMerchant !== null) {
+    if (targetTx.merchant !== edit.newMerchant) {
+      dataToUpdate.merchant = edit.newMerchant;
+      before.merchant = targetTx.merchant;
+      after.merchant = edit.newMerchant;
     }
   }
 

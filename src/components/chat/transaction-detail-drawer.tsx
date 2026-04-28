@@ -141,6 +141,7 @@ export function TransactionDetailDrawer({
           if (edits.memo !== undefined && edits.memo !== null) setMemo(edits.memo);
           if (edits.direction !== undefined && edits.direction !== null) setDirection(edits.direction);
           if (edits.currency !== undefined && edits.currency !== null) setCurrency(edits.currency);
+          if (edits.categoryId !== undefined && edits.categoryId !== null) setCategoryId(edits.categoryId);
           
           setSaveMsg({ text: "AI proposed edits applied! Review and save.", ok: true });
         }
@@ -360,7 +361,7 @@ export function TransactionDetailDrawer({
               >
                 {chatHistory.length === 0 ? (
                   <p className="text-muted-foreground text-[11px] text-center italic py-4">
-                    Ask a question about this transaction or request changes (e.g. "Change the merchant to Amazon").
+                    Ask a question about this transaction or request changes (e.g. &quot;Change the merchant to Amazon&quot;).
                   </p>
                 ) : (
                   chatHistory.map((msg, i) => (
