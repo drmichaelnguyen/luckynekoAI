@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { DEFAULT_9ROUTER_MODEL, LARGE_9ROUTER_MODEL } from "@/lib/ai/9router";
+import { DEFAULT_9ROUTER_MODEL, LARGE_9ROUTER_MODEL, normalize9RouterModel } from "@/lib/ai/9router";
 import { prisma } from "@/lib/prisma";
 
 export type AdminProviderChoice = "auto" | "gemini" | "9router";
@@ -55,8 +55,8 @@ export function defaultAdminRuntimeSettings(): AdminRuntimeSettings {
       chatPrimaryProvider: "auto",
       structuredPrimaryProvider: "auto",
       geminiModel: trimmedOr(process.env.GEMINI_MODEL, "gemini-2.5-flash"),
-      nineRouterMiniModel: trimmedOr(process.env.NINE_ROUTER_MINI_MODEL, DEFAULT_9ROUTER_MODEL),
-      nineRouterModel: trimmedOr(process.env.NINE_ROUTER_MODEL, LARGE_9ROUTER_MODEL),
+      nineRouterMiniModel: normalize9RouterModel(process.env.NINE_ROUTER_MINI_MODEL, DEFAULT_9ROUTER_MODEL),
+      nineRouterModel: normalize9RouterModel(process.env.NINE_ROUTER_MODEL, LARGE_9ROUTER_MODEL),
       nineRouterUrl: trimmedOr(
         process.env.NINE_ROUTER_URL,
         "https://9router.k-aithelittlelion.com/v1/chat/completions",
@@ -86,8 +86,8 @@ function normalizeSettings(input: Partial<AdminRuntimeSettings> | null | undefin
           ? input.routing.structuredPrimaryProvider
           : "auto",
       geminiModel: trimmedOr(input?.routing?.geminiModel, defaults.routing.geminiModel),
-      nineRouterMiniModel: trimmedOr(input?.routing?.nineRouterMiniModel, defaults.routing.nineRouterMiniModel),
-      nineRouterModel: trimmedOr(input?.routing?.nineRouterModel, defaults.routing.nineRouterModel),
+      nineRouterMiniModel: normalize9RouterModel(input?.routing?.nineRouterMiniModel, defaults.routing.nineRouterMiniModel),
+      nineRouterModel: normalize9RouterModel(input?.routing?.nineRouterModel, defaults.routing.nineRouterModel),
       nineRouterUrl: trimmedOr(input?.routing?.nineRouterUrl, defaults.routing.nineRouterUrl),
     },
     learning: {

@@ -21,8 +21,16 @@ type ChatCompletionResponse = {
   };
 };
 
-export const DEFAULT_9ROUTER_MODEL = "mini_models";
+// Default to the supported 9router GPT-5 target. Do not assume a separate mini alias exists.
+export const DEFAULT_9ROUTER_MODEL = "gpt-5";
 export const LARGE_9ROUTER_MODEL = "gpt-5";
+
+export function normalize9RouterModel(value: string | null | undefined, fallback: string): string {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  // These legacy placeholders and unsupported mini aliases get rejected by the upstream API.
+  if (!trimmed || trimmed === "mini_models" || trimmed === "gpt-5-mini") return fallback;
+  return trimmed;
+}
 
 function get9RouterConfig() {
   const apiKey = process.env.NINE_ROUTER_API_KEY?.trim();
@@ -33,7 +41,7 @@ function get9RouterConfig() {
     url:
       process.env.NINE_ROUTER_URL?.trim() ||
       "https://9router.k-aithelittlelion.com/v1/chat/completions",
-    model: process.env.NINE_ROUTER_MODEL?.trim() || DEFAULT_9ROUTER_MODEL,
+    model: normalize9RouterModel(process.env.NINE_ROUTER_MODEL, LARGE_9ROUTER_MODEL),
   };
 }
 
@@ -100,7 +108,7 @@ export async function call9RouterChatCompletion(input: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: input.model?.trim() || config.model,
+      model: normalize9RouterModel(input.model, config.model),
       messages: [
         { role: "system", content: input.systemInstruction },
         { role: "user", content: userContent },

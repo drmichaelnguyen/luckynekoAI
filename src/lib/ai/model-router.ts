@@ -1,4 +1,4 @@
-import { DEFAULT_9ROUTER_MODEL, LARGE_9ROUTER_MODEL } from "@/lib/ai/9router";
+import { DEFAULT_9ROUTER_MODEL, LARGE_9ROUTER_MODEL, normalize9RouterModel } from "@/lib/ai/9router";
 
 export type AiProvider = "gemini" | "9router";
 export type AiRouterModel = string;
@@ -42,13 +42,13 @@ export function chooseChatRouterModels(input: {
   miniModel?: string;
   largeModel?: string;
 }): AiRouterModel[] {
-  const miniModel = input.miniModel?.trim() || DEFAULT_9ROUTER_MODEL;
-  const largeModel = input.largeModel?.trim() || LARGE_9ROUTER_MODEL;
+  const miniModel = normalize9RouterModel(input.miniModel, DEFAULT_9ROUTER_MODEL);
+  const largeModel = normalize9RouterModel(input.largeModel, LARGE_9ROUTER_MODEL);
 
   if (!input.nineRouterAvailable) return [miniModel];
 
-  // We always want to try the mini model first. If it fails or is confused,
-  // we will fallback to the large model.
+  // We always want to try the configured first-pass model first. If it fails or is confused,
+  // we fall back to the larger model.
   if (miniModel === largeModel) {
     return [miniModel];
   }
@@ -56,7 +56,7 @@ export function chooseChatRouterModels(input: {
 }
 
 export function chooseStructuredTextRouterModel(input?: { miniModel?: string }): AiRouterModel {
-  return input?.miniModel?.trim() || DEFAULT_9ROUTER_MODEL;
+  return normalize9RouterModel(input?.miniModel, DEFAULT_9ROUTER_MODEL);
 }
 
 export function parseModelJson(rawText: string): unknown {

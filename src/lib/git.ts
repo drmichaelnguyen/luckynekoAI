@@ -101,23 +101,29 @@ export async function updateFromGitAndRestart(): Promise<GitUpdateResult> {
   const branch = status.branch === "HEAD" ? "main" : status.branch;
 
   const pullResult = await runCommand("git", ["pull", "--ff-only", "origin", branch]);
-  const installResult = await runCommand("npm", ["ci"]);
   const buildResult = await runCommand("npm", ["run", "build"]);
 
   const uid = typeof process.getuid === "function" ? process.getuid() : null;
   if (uid != null) {
     const restartTarget = `gui/${uid}/${LAUNCHD_LABEL}`;
-    const restart = spawn("/bin/sh", ["-lc", `sleep 2; launchctl kickstart -k ${restartTarget}`], {
-      cwd: REPO_ROOT,
-      detached: true,
-      stdio: "ignore",
-    });
+    const restart = spawn(
+      "/bin/sh",
+      [
+        "-lc",
+        `sleep 2; launchctl kill SIGTERM ${restartTarget}; sleep 2; launchctl kickstart -k ${restartTarget}`,
+      ],
+      {
+        cwd: REPO_ROOT,
+        detached: true,
+        stdio: "ignore",
+      },
+    );
     restart.unref();
   }
 
   return {
     branch,
-    pullOutput: [pullResult.stdout, pullResult.stderr, installResult.stdout, installResult.stderr]
+    pullOutput: [pullResult.stdout, pullResult.stderr]
       .filter(Boolean)
       .map(trim)
       .filter(Boolean)

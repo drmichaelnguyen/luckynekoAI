@@ -4,6 +4,13 @@ import { hash } from "bcryptjs";
 
 import { auth } from "@/auth";
 import {
+  call9RouterChatCompletion,
+  DEFAULT_9ROUTER_MODEL,
+  has9RouterConfig,
+  normalize9RouterModel,
+} from "@/lib/ai/9router";
+import { recordAiRequestLog } from "@/lib/ai/telemetry";
+import {
   loadAdminRuntimeSettings,
   saveAdminRuntimeSettings,
   type AdminRuntimeSettings as AdminRuntimeSettingsValue,
@@ -312,6 +319,73 @@ export async function updateAdminRuntimeSettingsAction(
       ok: false,
       error: error instanceof Error ? error.message : "Failed to save admin settings",
     };
+  }
+}
+
+export type AdminModelTestResult =
+  | {
+      ok: true;
+      provider: "9router";
+      model: string;
+      response: string;
+      usage: {
+        promptTokens: number | null;
+        completionTokens: number | null;
+        totalTokens: number | null;
+      };
+      latencyMs: number;
+    }
+  | { ok: false; provider: "9router"; model: string; error: string };
+
+export async function testAdminModelAction(input: {
+  model: string;
+  url?: string;
+}): Promise<AdminModelTestResult> {
+  await requireAdmin();
+
+  const model = normalize9RouterModel(input.model, DEFAULT_9ROUTER_MODEL);
+  if (!has9RouterConfig()) {
+    return { ok: false, provider: "9router", model, error: "Server is missing NINE_ROUTER_API_KEY." };
+  }
+
+  const startedAt = Date.now();
+  try {
+    const result = await call9RouterChatCompletion({
+      systemInstruction: "You are a model connectivity test. Reply with exactly OK.",
+      userPrompt: "Say OK.",
+      temperature: 0,
+      model,
+      url: input.url,
+    });
+
+    await recordAiRequestLog({
+      feature: "admin_model_test",
+      provider: "9router",
+      model,
+      success: true,
+      usage: result.usage,
+      latencyMs: Date.now() - startedAt,
+    });
+
+    return {
+      ok: true,
+      provider: "9router",
+      model,
+      response: result.text.trim(),
+      usage: result.usage,
+      latencyMs: Date.now() - startedAt,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Model test failed";
+    await recordAiRequestLog({
+      feature: "admin_model_test",
+      provider: "9router",
+      model,
+      success: false,
+      latencyMs: Date.now() - startedAt,
+      errorMessage: message,
+    });
+    return { ok: false, provider: "9router", model, error: message };
   }
 }
 

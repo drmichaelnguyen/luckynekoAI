@@ -9,6 +9,7 @@ import {
   listUsersAction,
   resetUserPasswordAction,
   pushAdminPortalAction,
+  testAdminModelAction,
   updateAdminRuntimeSettingsAction,
   setUserRoleAction,
   type AdminPortalSnapshot,
@@ -63,6 +64,7 @@ export function AdminPortal() {
   const [releaseMsg, setReleaseMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [settings, setSettings] = useState<AdminRuntimeSettings | null>(null);
   const [settingsMsg, setSettingsMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  const [modelTestMsg, setModelTestMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [gitMessage, setGitMessage] = useState<{ text: string; ok: boolean } | null>(null);
   const [commitMessage, setCommitMessage] = useState("");
   const [isPending, startTransition] = useTransition();
@@ -95,6 +97,11 @@ export function AdminPortal() {
   function flashSettings(text: string, ok: boolean) {
     setSettingsMsg({ text, ok });
     window.setTimeout(() => setSettingsMsg(null), 5000);
+  }
+
+  function flashModelTest(text: string, ok: boolean) {
+    setModelTestMsg({ text, ok });
+    window.setTimeout(() => setModelTestMsg(null), 7000);
   }
 
   function flashGit(text: string, ok: boolean) {
@@ -209,6 +216,21 @@ export function AdminPortal() {
         refresh();
       } else {
         flashSettings(res.error ?? "Failed to save settings", false);
+      }
+    });
+  }
+
+  function handleTestModel(model: string, label: string) {
+    startTransition(async () => {
+      const res = await testAdminModelAction({ model, url: settings?.routing.nineRouterUrl });
+      if (res.ok) {
+        const usageText =
+          res.usage.totalTokens != null
+            ? ` Tokens: ${formatNumber(res.usage.totalTokens)}.`
+            : "";
+        flashModelTest(`${label} worked: ${res.model} replied "${res.response}" in ${res.latencyMs} ms.${usageText}`, true);
+      } else {
+        flashModelTest(`${label} failed: ${res.error}`, false);
       }
     });
   }
@@ -391,7 +413,7 @@ export function AdminPortal() {
                     />
                   </label>
                   <label className="space-y-1 text-sm">
-                    <span className="text-xs uppercase tracking-wide text-muted-foreground">9router mini model</span>
+                    <span className="text-xs uppercase tracking-wide text-muted-foreground">9router first-pass model</span>
                     <Input
                       type="text"
                       value={settings?.routing.nineRouterMiniModel ?? ""}
@@ -411,7 +433,7 @@ export function AdminPortal() {
                     />
                   </label>
                   <div className="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                    Easy queries use the mini model by default. Harder chat queries and explicit overrides use the large model.
+                    If set, this model is tried before the fallback model. Leave it on a supported 9router model name.
                   </div>
                 </div>
                 <label className="block space-y-1 text-sm">
@@ -423,11 +445,32 @@ export function AdminPortal() {
                     disabled={!settings || isPending}
                   />
                 </label>
-                <div className="flex justify-end">
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => handleTestModel(settings?.routing.nineRouterMiniModel ?? "", "First-pass model")}
+                    disabled={!settings || isPending}
+                  >
+                    Test first-pass model
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => handleTestModel(settings?.routing.nineRouterModel ?? "", "Large model")}
+                    disabled={!settings || isPending}
+                  >
+                    Test large model
+                  </Button>
                   <Button type="button" onClick={handleSaveSettings} disabled={!settings || isPending}>
                     Save routing
                   </Button>
                 </div>
+                {modelTestMsg ? (
+                  <div className={cn("rounded-md border px-3 py-2 text-sm", modelTestMsg.ok ? "text-green-600" : "text-destructive")}>
+                    {modelTestMsg.text}
+                  </div>
+                ) : null}
               </div>
             </div>
 

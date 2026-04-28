@@ -7,6 +7,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 
 export type DashboardRange = "30d" | "month" | "all";
+export type DashboardDrillLevel = "year" | "month" | "week" | "transaction";
 
 export type LedgerDashboardResult =
   | {
@@ -53,6 +54,147 @@ function rangeLabel(range: DashboardRange): string {
   if (range === "all") return "All time";
   if (range === "30d") return "Last 30 days";
   return "This month (UTC)";
+}
+
+function startOfUtcYear(year: number): Date {
+  return new Date(Date.UTC(year, 0, 1, 0, 0, 0, 0));
+}
+
+function endOfUtcYear(year: number): Date {
+  return new Date(Date.UTC(year + 1, 0, 1, 0, 0, 0, 0));
+}
+
+function startOfUtcMonth(year: number, monthIndex: number): Date {
+  return new Date(Date.UTC(year, monthIndex, 1, 0, 0, 0, 0));
+}
+
+function endOfUtcMonth(year: number, monthIndex: number): Date {
+  return new Date(Date.UTC(year, monthIndex + 1, 1, 0, 0, 0, 0));
+}
+
+function addUtcDays(base: Date, days: number): Date {
+  return new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate() + days, 0, 0, 0, 0));
+}
+
+function mondayUtcStart(d: Date): Date {
+  const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const day = x.getUTCDay();
+  const offset = day === 0 ? -6 : 1 - day;
+  x.setUTCDate(x.getUTCDate() + offset);
+  return x;
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function monthLabel(year: number, monthIndex: number): string {
+  const name = new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" }).format(
+    startOfUtcMonth(year, monthIndex),
+  );
+  return `${name} ${year}`;
+}
+
+function weekLabel(start: Date): string {
+  const end = addUtcDays(start, 6);
+  const startFmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" }).format(start);
+  const endFmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" }).format(end);
+  const year = start.getUTCFullYear();
+  return `${startFmt} - ${endFmt}, ${year}`;
+}
+
+function intersectDateBounds(
+  base: { gte?: Date; lt?: Date } | undefined,
+  next: { gte: Date; lt: Date },
+): { gte: Date; lt: Date } {
+  return {
+    gte: base?.gte && base.gte > next.gte ? base.gte : next.gte,
+    lt: base?.lt && base.lt < next.lt ? base.lt : next.lt,
+  };
+}
+
+function transactionWeekLabel(start: Date): string {
+  return `Week of ${weekLabel(start)}`;
+}
+
+type DrillBucket = {
+  key: string;
+  label: string;
+  periodStart: string;
+  periodEnd: string;
+  outCents: number;
+  inCents: number;
+  transactionCount: number;
+};
+
+function groupDateBuckets(
+  rows: Array<{ occurredAt: Date; amountCents: number; direction: "out" | "in" }>,
+  level: Exclude<DashboardDrillLevel, "transaction">,
+): DrillBucket[] {
+  const bucketMap = new Map<
+    string,
+    {
+      label: string;
+      start: Date;
+      end: Date;
+      outCents: number;
+      inCents: number;
+      transactionCount: number;
+    }
+  >();
+
+  for (const row of rows) {
+    let key: string;
+    let label: string;
+    let start: Date;
+    let end: Date;
+
+    if (level === "year") {
+      const year = row.occurredAt.getUTCFullYear();
+      key = String(year);
+      label = key;
+      start = startOfUtcYear(year);
+      end = endOfUtcYear(year);
+    } else if (level === "month") {
+      const year = row.occurredAt.getUTCFullYear();
+      const monthIndex = row.occurredAt.getUTCMonth();
+      key = `${year}-${pad2(monthIndex + 1)}`;
+      label = monthLabel(year, monthIndex);
+      start = startOfUtcMonth(year, monthIndex);
+      end = endOfUtcMonth(year, monthIndex);
+    } else {
+      start = mondayUtcStart(row.occurredAt);
+      key = start.toISOString().slice(0, 10);
+      label = transactionWeekLabel(start);
+      end = addUtcDays(start, 7);
+    }
+
+    const existing =
+      bucketMap.get(key) ?? {
+        label,
+        start,
+        end,
+        outCents: 0,
+        inCents: 0,
+        transactionCount: 0,
+      };
+    existing.transactionCount += 1;
+    if (row.direction === "out") existing.outCents += row.amountCents;
+    else existing.inCents += row.amountCents;
+    bucketMap.set(key, existing);
+  }
+
+  return [...bucketMap.entries()]
+    .sort((a, b) => a[1].start.getTime() - b[1].start.getTime())
+    .map(([key, value]) => ({
+      key,
+      label: value.label,
+      periodStart: value.start.toISOString(),
+      periodEnd: value.end.toISOString(),
+      outCents: value.outCents,
+      inCents: value.inCents,
+      transactionCount: value.transactionCount,
+    }));
 }
 
 export async function getLedgerDashboardAction(range: DashboardRange): Promise<LedgerDashboardResult> {
@@ -204,6 +346,10 @@ const DrilldownInputSchema = z
     walletId: z.string().min(1).optional(),
     merchant: z.string().min(1).max(400).optional(),
     flow: z.enum(["out", "in", "all"]).default("all"),
+    level: z.enum(["year", "month", "week", "transaction"]).optional(),
+    year: z.number().int().min(1900).max(3000).optional(),
+    month: z.number().int().min(1).max(12).optional(),
+    weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   })
   .superRefine((d, ctx) => {
     if (d.lens === "category" && d.categoryId === undefined) {
@@ -214,6 +360,17 @@ const DrilldownInputSchema = z
     }
     if (d.lens === "merchant" && !d.merchant) {
       ctx.addIssue({ code: "custom", message: "merchant required" });
+    }
+    if (d.lens === "category" && d.level && d.level !== "year") {
+      if ((d.level === "month" || d.level === "week" || d.level === "transaction") && d.year === undefined) {
+        ctx.addIssue({ code: "custom", message: "year required for category drilldown" });
+      }
+      if ((d.level === "week" || d.level === "transaction") && d.month === undefined) {
+        ctx.addIssue({ code: "custom", message: "month required for category drilldown" });
+      }
+      if (d.level === "transaction" && !d.weekStart) {
+        ctx.addIssue({ code: "custom", message: "weekStart required for category drilldown" });
+      }
     }
   });
 
@@ -238,6 +395,8 @@ export type DashboardDrilldownResult =
       ok: true;
       title: string;
       subtitle: string;
+      level: DashboardDrillLevel;
+      buckets: DrillBucket[];
       series: DrilldownSeriesPoint[];
       transactions: Array<{
         id: string;
@@ -252,14 +411,6 @@ export type DashboardDrilldownResult =
     }
   | { ok: false; error: string };
 
-function mondayUtcKey(d: Date): string {
-  const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-  const day = x.getUTCDay();
-  const offset = day === 0 ? -6 : 1 - day;
-  x.setUTCDate(x.getUTCDate() + offset);
-  return x.toISOString().slice(0, 10);
-}
-
 export async function getLedgerDashboardDrilldownAction(
   input: z.infer<typeof DrilldownInputSchema>,
 ): Promise<DashboardDrilldownResult> {
@@ -271,7 +422,7 @@ export async function getLedgerDashboardDrilldownAction(
   const session = await auth();
   if (!session?.user?.id) return { ok: false, error: "Unauthorized" };
 
-  const { range, lens, categoryId, walletId, merchant, flow } = parsed.data;
+  const { range, lens, categoryId, walletId, merchant, flow, level, year, month, weekStart } = parsed.data;
   const userId = session.user.id;
 
   const user = await prisma.user.findUnique({
@@ -280,19 +431,20 @@ export async function getLedgerDashboardDrilldownAction(
   });
   const displayCurrency = (user?.preferredCurrency ?? "CAD").toUpperCase().slice(0, 3);
 
-  const from = startDateForRange(range);
-  const dateWhere = from ? { gte: from } : undefined;
-  const weekMode = range === "all";
-
   const where: Prisma.TransactionWhereInput = {
     userId,
     currency: displayCurrency,
     status: { not: "rejected" },
-    ...(dateWhere ? { occurredAt: dateWhere } : {}),
   };
+  const from = startDateForRange(range);
+  const dateWhere = from ? { gte: from } : undefined;
+  if (dateWhere) {
+    where.occurredAt = dateWhere;
+  }
 
   let title = "Activity";
   let subtitle = `${rangeLabel(range)} · ${displayCurrency}`;
+  const drillLevel: DashboardDrillLevel = lens === "category" ? level ?? "year" : "transaction";
 
   if (lens === "category") {
     where.categoryId = categoryId;
@@ -302,6 +454,159 @@ export async function getLedgerDashboardDrilldownAction(
     } else {
       title = "Uncategorized";
     }
+
+    const categoryScope: Prisma.TransactionWhereInput = { ...where };
+    if (drillLevel === "year") {
+      const yearRows = await prisma.transaction.findMany({
+        where: categoryScope,
+        select: { occurredAt: true, amountCents: true, direction: true },
+        orderBy: { occurredAt: "asc" },
+        take: 10000,
+      });
+      const buckets = groupDateBuckets(yearRows, "year");
+      subtitle = `${rangeLabel(range)} · ${displayCurrency} · years`;
+      if (flow === "out") subtitle = `Outflows · ${subtitle}`;
+      else if (flow === "in") subtitle = `Inflows · ${subtitle}`;
+      const series: DrilldownSeriesPoint[] = buckets.map((bucket) => ({
+        period: `year:${bucket.key}`,
+        periodLabel: bucket.label,
+        outCents: bucket.outCents,
+        inCents: bucket.inCents,
+      }));
+      return {
+        ok: true,
+        title,
+        subtitle,
+        level: drillLevel,
+        buckets,
+        series,
+        transactions: [],
+      };
+    }
+
+    if (drillLevel === "month") {
+      const targetYear = year!;
+      categoryScope.occurredAt = intersectDateBounds(dateWhere, {
+        gte: startOfUtcYear(targetYear),
+        lt: endOfUtcYear(targetYear),
+      });
+      const monthRows = await prisma.transaction.findMany({
+        where: categoryScope,
+        select: { occurredAt: true, amountCents: true, direction: true },
+        orderBy: { occurredAt: "asc" },
+        take: 10000,
+      });
+      const buckets = groupDateBuckets(monthRows, "month");
+      subtitle = `${targetYear} · ${displayCurrency} · months`;
+      if (flow === "out") subtitle = `Outflows · ${subtitle}`;
+      else if (flow === "in") subtitle = `Inflows · ${subtitle}`;
+      const series: DrilldownSeriesPoint[] = buckets.map((bucket) => ({
+        period: `month:${bucket.key}`,
+        periodLabel: bucket.label,
+        outCents: bucket.outCents,
+        inCents: bucket.inCents,
+      }));
+      return {
+        ok: true,
+        title,
+        subtitle,
+        level: drillLevel,
+        buckets,
+        series,
+        transactions: [],
+      };
+    }
+
+    if (drillLevel === "week") {
+      const targetYear = year!;
+      const targetMonthIndex = month! - 1;
+      categoryScope.occurredAt = intersectDateBounds(dateWhere, {
+        gte: startOfUtcMonth(targetYear, targetMonthIndex),
+        lt: endOfUtcMonth(targetYear, targetMonthIndex),
+      });
+      const weekRows = await prisma.transaction.findMany({
+        where: categoryScope,
+        select: { occurredAt: true, amountCents: true, direction: true },
+        orderBy: { occurredAt: "asc" },
+        take: 10000,
+      });
+      const buckets = groupDateBuckets(weekRows, "week");
+      subtitle = `${monthLabel(targetYear, targetMonthIndex)} · weeks`;
+      if (flow === "out") subtitle = `Outflows · ${subtitle}`;
+      else if (flow === "in") subtitle = `Inflows · ${subtitle}`;
+      const series: DrilldownSeriesPoint[] = buckets.map((bucket) => ({
+        period: `week:${bucket.key}`,
+        periodLabel: bucket.label,
+        outCents: bucket.outCents,
+        inCents: bucket.inCents,
+      }));
+      return {
+        ok: true,
+        title,
+        subtitle,
+        level: drillLevel,
+        buckets,
+        series,
+        transactions: [],
+      };
+    }
+
+    const targetYear = year!;
+    const targetMonthIndex = month! - 1;
+    const targetWeekStart = new Date(`${weekStart}T00:00:00.000Z`);
+    categoryScope.occurredAt = intersectDateBounds(dateWhere, {
+      gte: targetWeekStart,
+      lt: addUtcDays(targetWeekStart, 7),
+    });
+    const txWhere: Prisma.TransactionWhereInput = { ...categoryScope };
+    if (flow === "out") txWhere.direction = "out";
+    else if (flow === "in") txWhere.direction = "in";
+
+    const rows = await prisma.transaction.findMany({
+      where: txWhere,
+      orderBy: { occurredAt: "desc" },
+      take: 80,
+      include: { wallet: true, category: true },
+    });
+    const buckets = [
+      {
+        key: weekStart!,
+        label: transactionWeekLabel(targetWeekStart),
+        periodStart: targetWeekStart.toISOString(),
+        periodEnd: addUtcDays(targetWeekStart, 7).toISOString(),
+        outCents: rows.filter((r) => r.direction === "out").reduce((sum, r) => sum + r.amountCents, 0),
+        inCents: rows.filter((r) => r.direction === "in").reduce((sum, r) => sum + r.amountCents, 0),
+        transactionCount: rows.length,
+      },
+    ];
+    const series = buckets.map((bucket) => ({
+      period: `week:${bucket.key}`,
+      periodLabel: bucket.label,
+      outCents: bucket.outCents,
+      inCents: bucket.inCents,
+    }));
+    const transactions = rows.map((t) => ({
+      id: t.id,
+      occurredAt: t.occurredAt.toISOString(),
+      direction: t.direction,
+      amountCents: t.amountCents,
+      merchant: t.merchant,
+      memo: t.memo,
+      walletName: t.wallet.name,
+      categoryName: t.category?.name ?? "Uncategorized",
+    }));
+    subtitle = `${monthLabel(targetYear, targetMonthIndex)} · ${transactionWeekLabel(targetWeekStart)}`;
+    if (flow === "out") subtitle = `Outflows · ${subtitle}`;
+    else if (flow === "in") subtitle = `Inflows · ${subtitle}`;
+    return {
+      ok: true,
+      title,
+      subtitle,
+      level: drillLevel,
+      buckets,
+      series,
+      transactions,
+    };
   } else if (lens === "wallet" && walletId) {
     where.walletId = walletId;
     const w = await prisma.wallet.findFirst({ where: { id: walletId, userId } });
@@ -317,6 +622,8 @@ export async function getLedgerDashboardDrilldownAction(
   if (flow === "out") subtitle = `Outflows · ${subtitle}`;
   else if (flow === "in") subtitle = `Inflows · ${subtitle}`;
 
+  const weekMode = range === "all";
+
   const seriesRows = await prisma.transaction.findMany({
     where,
     select: { occurredAt: true, amountCents: true, direction: true },
@@ -326,7 +633,7 @@ export async function getLedgerDashboardDrilldownAction(
 
   const bucket = new Map<string, { outCents: number; inCents: number }>();
   for (const t of seriesRows) {
-    const key = weekMode ? mondayUtcKey(t.occurredAt) : t.occurredAt.toISOString().slice(0, 10);
+    const key = weekMode ? mondayUtcStart(t.occurredAt).toISOString().slice(0, 10) : t.occurredAt.toISOString().slice(0, 10);
     const cur = bucket.get(key) ?? { outCents: 0, inCents: 0 };
     if (t.direction === "out") cur.outCents += t.amountCents;
     else cur.inCents += t.amountCents;
@@ -368,6 +675,8 @@ export async function getLedgerDashboardDrilldownAction(
     ok: true,
     title,
     subtitle,
+    level: drillLevel,
+    buckets: [],
     series,
     transactions,
   };

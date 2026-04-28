@@ -35,9 +35,24 @@ function formatMoney(cents: number, currency: string) {
 
 type DrillSelection =
   | { lens: "overview"; flow: "out" | "in" | "all" }
-  | { lens: "category"; categoryId: string | null; name: string; flow: "out" | "in" }
+  | CategoryDrillSelection
   | { lens: "wallet"; walletId: string; name: string; flow: "out" | "in" }
   | { lens: "merchant"; merchant: string; flow: "out" };
+
+type CategoryDrillSelection =
+  | { lens: "category"; categoryId: string | null; name: string; flow: "out" | "in"; level: "year" }
+  | { lens: "category"; categoryId: string | null; name: string; flow: "out" | "in"; level: "month"; year: number }
+  | { lens: "category"; categoryId: string | null; name: string; flow: "out" | "in"; level: "week"; year: number; month: number }
+  | {
+      lens: "category";
+      categoryId: string | null;
+      name: string;
+      flow: "out" | "in";
+      level: "transaction";
+      year: number;
+      month: number;
+      weekStart: string;
+    };
 
 function SeriesChart({
   series,
@@ -88,13 +103,30 @@ function SeriesChart({
   );
 }
 
-function redIntensityClass(pct: number): string {
-  if (pct >= 90) return "bg-red-700";
-  if (pct >= 70) return "bg-red-600";
-  if (pct >= 50) return "bg-red-500";
-  if (pct >= 30) return "bg-red-400";
-  if (pct >= 15) return "bg-red-300";
-  return "bg-red-200";
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+function valueColor(ratio: number, mode: "expense" | "income"): string {
+  const t = clamp01(ratio);
+  if (mode === "expense") {
+    const hue = 34 - t * 28;
+    const saturation = 95;
+    const lightness = 62 - t * 28;
+    return `hsl(${hue} ${saturation}% ${lightness}%)`;
+  }
+  const hue = 182 + t * 44;
+  const saturation = 90;
+  const lightness = 63 - t * 28;
+  return `hsl(${hue} ${saturation}% ${lightness}%)`;
+}
+
+function donutSegmentColor(index: number): string {
+  const hue = (index * 137.508 + 18) % 360;
+  const cycle = index % 4;
+  const saturation = 78;
+  const lightness = [56, 64, 50, 70][cycle];
+  return `hsl(${hue.toFixed(1)} ${saturation}% ${lightness}%)`;
 }
 
 function InteractiveChartBlock<T extends { name: string; expenseCents: number; incomeCents: number; icon?: string | null }>({
@@ -113,10 +145,16 @@ function InteractiveChartBlock<T extends { name: string; expenseCents: number; i
   enableCircleChart?: boolean;
 }) {
   const [view, setView] = useState<"bar" | "circle">("bar");
+  const [activeIndex, setActiveIndex] = useState(0);
   const filtered = rows.filter((r) => r[valueKey] > 0);
   const values = filtered.map((r) => r[valueKey]);
   const max = values.length > 0 ? Math.max(...values) : 1;
   const total = values.reduce((sum, v) => sum + v, 0);
+  const mode = valueKey === "expenseCents" ? "expense" : "income";
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [title, view, valueKey]);
 
   if (filtered.length === 0) {
     return (
@@ -127,18 +165,58 @@ function InteractiveChartBlock<T extends { name: string; expenseCents: number; i
     );
   }
 
-  const outColors = ["#b91c1c", "#dc2626", "#ef4444", "#f87171", "#fca5a5", "#f43f5e", "#e11d48", "#be123c"];
-  const inColors = ["#047857", "#059669", "#10b981", "#34d399", "#6ee7b7", "#0d9488", "#14b8a6", "#2dd4bf"];
-  const palette = valueKey === "expenseCents" ? outColors : inColors;
-
-  let currentOffset = 0;
-  const segments = filtered.map((row, i) => {
+  const segments = filtered.map((row, index) => {
     const v = row[valueKey];
     const pct = (v / total) * 100;
-    const segment = { pct, offset: currentOffset, row, index: i, color: palette[i % palette.length] };
-    currentOffset += pct;
-    return segment;
+    return {
+      pct,
+      row,
+      barColor: valueColor(v / max, mode),
+      donutColor: donutSegmentColor(index),
+    };
   });
+
+  const activeSegment = segments[Math.min(activeIndex, segments.length - 1)] ?? segments[0] ?? null;
+  const circleViewId = `circle-${title.replace(/\s+/g, "-").toLowerCase()}`;
+
+  function makeArcLabel(seg: (typeof segments)[number], index: number) {
+    const radius = 42;
+    const strokeWidth = 12;
+    const circumference = 2 * Math.PI * radius;
+    const startOffset = segments
+      .slice(0, index)
+      .reduce((sum, prev) => sum + circumference * (prev.pct / 100), 0);
+    const arc = circumference * (seg.pct / 100);
+    const centerAngle = (-Math.PI / 2) + (startOffset / circumference) * (Math.PI * 2) + (arc / circumference) * Math.PI;
+    const outerRadius = radius + strokeWidth / 2 + 1.5;
+    const labelRadius = radius + 19;
+    const lineStart = {
+      x: 60 + Math.cos(centerAngle) * outerRadius,
+      y: 60 + Math.sin(centerAngle) * outerRadius,
+    };
+    const elbow = {
+      x: 60 + Math.cos(centerAngle) * (radius + 12),
+      y: 60 + Math.sin(centerAngle) * (radius + 12),
+    };
+    const labelAnchor = {
+      x: 60 + Math.cos(centerAngle) * labelRadius,
+      y: 60 + Math.sin(centerAngle) * labelRadius,
+    };
+    const isRight = Math.cos(centerAngle) >= 0;
+    const labelX = isRight ? 104 : 16;
+    const labelY = Math.max(12, Math.min(108, labelAnchor.y));
+    return {
+      lineStart,
+      elbow,
+      labelX,
+      labelY,
+      anchorX: isRight ? labelX - 1.5 : labelX + 1.5,
+      anchorY: labelY,
+      textAnchor: (isRight ? "start" : "end") as "start" | "end",
+      displayPct: Math.round(seg.pct),
+      centerAngle,
+    };
+  }
 
   return (
     <div className="rounded-xl border bg-card px-3 py-3">
@@ -163,14 +241,16 @@ function InteractiveChartBlock<T extends { name: string; expenseCents: number; i
           </div>
         )}
       </div>
-      <p className="mt-1 text-[10px] text-muted-foreground">Tap a {view === "bar" ? "bar" : "segment"} for detail.</p>
+      <p className="mt-1 text-[10px] text-muted-foreground">
+        Tap a {view === "bar" ? "bar" : "segment"} for detail. The higher the amount, the {mode === "expense" ? "hotter" : "cooler"} the color.
+      </p>
       
       {view === "bar" ? (
         <ul className="mt-3 space-y-2">
           {filtered.map((row) => {
             const v = row[valueKey];
             const pct = Math.round((v / max) * 100);
-            const barClass = valueKey === "expenseCents" ? redIntensityClass(pct) : "bg-emerald-500";
+            const barColor = valueColor(v / max, mode);
             return (
               <li key={`${row.name}-${valueKey}`} className="space-y-1">
                 <button
@@ -183,12 +263,21 @@ function InteractiveChartBlock<T extends { name: string; expenseCents: number; i
                       {row.icon ? <img src={row.icon} alt="" className="h-4 w-4 rounded-sm object-cover" /> : null}
                       {row.name}
                     </span>
-                    <span className={cn("shrink-0 font-medium", valueKey === "expenseCents" ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400")}>
+                    <span
+                      className="shrink-0 font-medium"
+                      style={{ color: barColor }}
+                    >
                       {formatMoney(v, currency)}
                     </span>
                   </div>
                   <div className="mt-1 h-2.5 overflow-hidden rounded-full bg-muted">
-                    <div className={cn("h-full rounded-full transition-[width]", barClass)} style={{ width: `${pct}%` }} />
+                    <div
+                      className="h-full rounded-full transition-[width]"
+                      style={{
+                        width: `${pct}%`,
+                        backgroundColor: barColor,
+                      }}
+                    />
                   </div>
                 </button>
               </li>
@@ -196,42 +285,221 @@ function InteractiveChartBlock<T extends { name: string; expenseCents: number; i
           })}
         </ul>
       ) : (
-        <div className="mt-4 flex items-center justify-center gap-4">
-          <div className="relative h-28 w-28 shrink-0">
-            <svg viewBox="0 0 32 32" className="h-full w-full -rotate-90 transform">
-              {segments.map((seg) => (
-                <circle
-                  key={seg.row.name}
-                  r="15.91549430918954"
-                  cx="16"
-                  cy="16"
-                  fill="transparent"
-                  stroke={seg.color}
-                  strokeWidth="4"
-                  strokeDasharray={`${Math.max(0, seg.pct - 0.5)} ${100 - Math.max(0, seg.pct - 0.5)}`}
-                  strokeDashoffset={-seg.offset}
-                  className="transition-all cursor-pointer hover:stroke-[5] active:stroke-[5]"
-                  onClick={() => onBarTap(seg.row)}
-                />
-              ))}
+        <div className="mt-4 flex flex-col items-center gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="relative flex h-56 w-56 shrink-0 items-center justify-center">
+            <div className="absolute inset-0 rounded-full bg-gradient-to-br from-background via-muted/35 to-transparent" />
+            <svg viewBox="0 0 120 120" className="relative h-full w-full overflow-visible drop-shadow-sm">
+              <defs>
+                <filter id={`chart-shadow-${circleViewId}`}>
+                  <feDropShadow dx="0" dy="2" stdDeviation="2" floodColor="rgba(0,0,0,0.12)" />
+                </filter>
+              </defs>
+              {segments.map((seg, index) => {
+                const radius = 42;
+                const strokeWidth = 12;
+                const circumference = 2 * Math.PI * radius;
+                const arc = circumference * (seg.pct / 100);
+                const offset =
+                  circumference -
+                  segments.slice(0, index).reduce((sum, prev) => sum + circumference * (prev.pct / 100), 0);
+                const isActive = index === activeIndex;
+                return (
+                  <g key={seg.row.name}>
+                    <circle
+                      r={radius}
+                      cx="60"
+                      cy="60"
+                      fill="transparent"
+                      stroke={seg.donutColor}
+                      strokeWidth={isActive ? strokeWidth + 2 : strokeWidth}
+                      strokeLinecap="round"
+                      strokeDasharray={`${arc} ${circumference - arc}`}
+                      strokeDashoffset={offset}
+                      transform="rotate(-90 60 60)"
+                      filter={`url(#chart-shadow-${circleViewId})`}
+                      className={cn(
+                        "cursor-pointer transition-[opacity,stroke-width,transform] hover:opacity-85 active:opacity-80",
+                        isActive && "opacity-100",
+                      )}
+                      onClick={() => {
+                        setActiveIndex(index);
+                        onBarTap(seg.row);
+                      }}
+                      onMouseEnter={() => setActiveIndex(index)}
+                      onFocus={() => setActiveIndex(index)}
+                      tabIndex={0}
+                      role="button"
+                      aria-label={`${seg.row.name}, ${Math.round(seg.pct)} percent, ${formatMoney(seg.row[valueKey], currency)}`}
+                    />
+                    {isActive ? (
+                        <circle
+                          r={radius - 1}
+                          cx="60"
+                          cy="60"
+                          fill="transparent"
+                        stroke="rgba(255,255,255,0.28)"
+                        strokeWidth="1.25"
+                        strokeDasharray={`${arc} ${circumference - arc}`}
+                        strokeDashoffset={offset}
+                        transform="rotate(-90 60 60)"
+                        pointerEvents="none"
+                      />
+                    ) : null}
+                    {segments.length > 1 ? (() => {
+                      const label = makeArcLabel(seg, index);
+                      return (
+                        <g pointerEvents="none">
+                          <polyline
+                            points={`${label.lineStart.x.toFixed(1)},${label.lineStart.y.toFixed(1)} ${label.elbow.x.toFixed(1)},${label.elbow.y.toFixed(1)} ${label.anchorX.toFixed(1)},${label.anchorY.toFixed(1)}`}
+                            fill="none"
+                            stroke={seg.donutColor}
+                            strokeWidth="1.2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            opacity={isActive ? 0.95 : 0.7}
+                          />
+                          <circle cx={label.anchorX} cy={label.anchorY} r="1.8" fill={seg.donutColor} opacity={isActive ? 1 : 0.8} />
+                          <text
+                            x={label.labelX}
+                            y={label.labelY - 1.8}
+                            textAnchor={label.textAnchor}
+                            className="fill-foreground"
+                            style={{ fontSize: "6px", fontWeight: 600 }}
+                          >
+                            {seg.row.name}
+                          </text>
+                          <text
+                            x={label.labelX}
+                            y={label.labelY + 4.2}
+                            textAnchor={label.textAnchor}
+                            className="fill-muted-foreground"
+                            style={{ fontSize: "5px", fontWeight: 500 }}
+                          >
+                            {label.displayPct}%
+                          </text>
+                        </g>
+                      );
+                    })() : null}
+                  </g>
+                );
+              })}
             </svg>
+            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center rounded-full">
+              <div className="text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Total</div>
+              <div className="mt-1 px-3 text-center text-sm font-semibold tabular-nums text-foreground">
+                {activeSegment ? formatMoney(activeSegment.row[valueKey], currency) : formatMoney(total, currency)}
+              </div>
+              <div className="mt-0.5 max-w-[8rem] truncate text-center text-[10px] text-muted-foreground">
+                {activeSegment ? activeSegment.row.name : "Select a segment"}
+              </div>
+            </div>
           </div>
-          <ul className="flex-1 space-y-1.5 overflow-y-auto max-h-32 pr-2 text-[10px]">
-             {segments.map((seg) => (
-                <li key={seg.row.name}>
-                  <button type="button" onClick={() => onBarTap(seg.row)} className="flex w-full items-center justify-between text-left hover:bg-muted/50 rounded-sm px-1 py-0.5">
-                    <span className="flex items-center gap-1.5 truncate font-medium text-foreground">
-                      <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: seg.color }} />
-                      {seg.row.icon ? <img src={seg.row.icon} className="h-3 w-3 rounded-sm object-cover" alt="" /> : null}
-                      <span className="truncate">{seg.row.name}</span>
-                    </span>
-                    <span className="shrink-0 ml-2 font-medium text-muted-foreground">{Math.round(seg.pct)}%</span>
-                  </button>
-                </li>
-             ))}
+          <ul className="w-full flex-1 space-y-1.5 overflow-y-auto max-h-44 pr-1 text-[10px] sm:max-h-48">
+            {segments.map((seg) => (
+              <li key={seg.row.name}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveIndex(segments.findIndex((candidate) => candidate.row.name === seg.row.name));
+                    onBarTap(seg.row);
+                  }}
+                  onMouseEnter={() => setActiveIndex(segments.findIndex((candidate) => candidate.row.name === seg.row.name))}
+                  className={cn(
+                    "flex w-full items-center justify-between rounded-sm px-1 py-0.5 text-left transition hover:bg-muted/50",
+                    seg.row.name === activeSegment?.row.name && "bg-muted/70",
+                  )}
+                >
+                  <span className="flex min-w-0 items-center gap-1.5 truncate font-medium text-foreground">
+                    <span className="h-2.5 w-2.5 shrink-0 rounded-full shadow-sm" style={{ backgroundColor: seg.donutColor }} />
+                    {seg.row.icon ? <img src={seg.row.icon} className="h-3 w-3 rounded-sm object-cover" alt="" /> : null}
+                    <span className="truncate">{seg.row.name}</span>
+                  </span>
+                  <span className="shrink-0 ml-2 font-medium text-muted-foreground">
+                    {Math.round(seg.pct)}%
+                  </span>
+                </button>
+              </li>
+            ))}
           </ul>
         </div>
       )}
+    </div>
+  );
+}
+
+function DrillBucketGrid({
+  buckets,
+  flow,
+  currency,
+  level,
+  onSelect,
+  modeLabel,
+}: {
+  buckets: Array<{
+    key: string;
+    label: string;
+    periodStart: string;
+    periodEnd: string;
+    outCents: number;
+    inCents: number;
+    transactionCount: number;
+  }>;
+  flow: "out" | "in" | "all";
+  currency: string;
+  level: "year" | "month" | "week" | "transaction";
+  onSelect: (bucket: { key: string; periodStart: string }) => void;
+  modeLabel: string;
+}) {
+  if (buckets.length === 0) {
+    return <p className="mt-4 text-xs text-muted-foreground">No entries found for this slice.</p>;
+  }
+
+  const getAmount = (bucket: (typeof buckets)[number]) =>
+    flow === "in" ? bucket.inCents : flow === "out" ? bucket.outCents : bucket.outCents + bucket.inCents;
+
+  return (
+    <div className="mt-4 space-y-3">
+      <div className="grid gap-2 sm:grid-cols-2">
+        {buckets.map((bucket) => {
+          const amount = getAmount(bucket);
+          const label = bucket.label;
+          return (
+            <button
+              key={bucket.key}
+              type="button"
+              onClick={() => onSelect({ key: bucket.key, periodStart: bucket.periodStart })}
+              className="rounded-xl border bg-card px-3 py-3 text-left ring-offset-background transition hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-foreground">{label}</div>
+                  <div className="mt-0.5 text-[11px] text-muted-foreground">{bucket.transactionCount} transactions</div>
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className="text-sm font-semibold tabular-nums text-foreground">{formatMoney(amount, currency)}</div>
+                  {flow === "all" ? (
+                    <div className="mt-0.5 text-[10px] text-muted-foreground">
+                      {formatMoney(bucket.inCents, currency)} in · {formatMoney(bucket.outCents, currency)} out
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                <div
+                  className={cn(
+                    "h-full rounded-full",
+                    flow === "in" ? "bg-emerald-500" : flow === "out" ? "bg-red-500" : "bg-primary",
+                  )}
+                  style={{ width: "100%" }}
+                />
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-[10px] text-muted-foreground">
+        Tap a {modeLabel} bucket to drill deeper.
+      </p>
     </div>
   );
 }
@@ -342,7 +610,36 @@ export function DashboardInsights({
           if (sel.lens === "overview") {
             payload = { ...base, lens: "overview" };
           } else if (sel.lens === "category") {
-            payload = { ...base, lens: "category", categoryId: sel.categoryId };
+            if (sel.level === "year") {
+              payload = { ...base, lens: "category", categoryId: sel.categoryId, level: "year" };
+            } else if (sel.level === "month") {
+              payload = {
+                ...base,
+                lens: "category",
+                categoryId: sel.categoryId,
+                level: "month",
+                year: sel.year,
+              };
+            } else if (sel.level === "week") {
+              payload = {
+                ...base,
+                lens: "category",
+                categoryId: sel.categoryId,
+                level: "week",
+                year: sel.year,
+                month: sel.month,
+              };
+            } else {
+              payload = {
+                ...base,
+                lens: "category",
+                categoryId: sel.categoryId,
+                level: "transaction",
+                year: sel.year,
+                month: sel.month,
+                weekStart: sel.weekStart,
+              };
+            }
           } else if (sel.lens === "wallet") {
             payload = { ...base, lens: "wallet", walletId: sel.walletId };
           } else {
@@ -372,6 +669,81 @@ export function DashboardInsights({
     setDrill(null);
     setDrillData(null);
     setDrillError(null);
+  };
+
+  const handleDrillBack = () => {
+    if (!drill || drill.lens !== "category") {
+      closeDrill();
+      return;
+    }
+    if (drill.level === "year") {
+      closeDrill();
+      return;
+    }
+    if (drill.level === "month") {
+      loadDrill({ lens: "category", categoryId: drill.categoryId, name: drill.name, flow: drill.flow, level: "year" });
+      return;
+    }
+    if (drill.level === "week") {
+      loadDrill({
+        lens: "category",
+        categoryId: drill.categoryId,
+        name: drill.name,
+        flow: drill.flow,
+        level: "month",
+        year: drill.year,
+      });
+      return;
+    }
+    loadDrill({
+      lens: "category",
+      categoryId: drill.categoryId,
+      name: drill.name,
+      flow: drill.flow,
+      level: "week",
+      year: drill.year,
+      month: drill.month,
+    });
+  };
+
+  const handleCategoryBucketSelect = (bucket: { key: string; periodStart: string }) => {
+    if (!drill || drill.lens !== "category") return;
+    if (drill.level === "year") {
+      loadDrill({
+        lens: "category",
+        categoryId: drill.categoryId,
+        name: drill.name,
+        flow: drill.flow,
+        level: "month",
+        year: Number(bucket.key),
+      });
+      return;
+    }
+    if (drill.level === "month") {
+      const [yearPart, monthPart] = bucket.key.split("-");
+      loadDrill({
+        lens: "category",
+        categoryId: drill.categoryId,
+        name: drill.name,
+        flow: drill.flow,
+        level: "week",
+        year: Number(yearPart),
+        month: Number(monthPart),
+      });
+      return;
+    }
+    if (drill.level === "week") {
+      loadDrill({
+        lens: "category",
+        categoryId: drill.categoryId,
+        name: drill.name,
+        flow: drill.flow,
+        level: "transaction",
+        year: drill.year,
+        month: drill.month,
+        weekStart: bucket.key,
+      });
+    }
   };
 
   return (
@@ -426,7 +798,7 @@ export function DashboardInsights({
                       {drillData?.subtitle ?? "Loading…"}
                     </p>
                   </div>
-                  <Button type="button" variant="outline" size="sm" className="shrink-0 gap-1" onClick={closeDrill}>
+                  <Button type="button" variant="outline" size="sm" className="shrink-0 gap-1" onClick={handleDrillBack}>
                     <ArrowLeft className="h-3.5 w-3.5" />
                     Back
                   </Button>
@@ -441,42 +813,103 @@ export function DashboardInsights({
                   <p className="mt-4 text-sm text-destructive">{drillError}</p>
                 ) : drillData ? (
                   <>
-                    <SeriesChart series={drillData.series} currency={data.displayCurrency} />
-                    <div className="mt-5 border-t pt-3">
-                      <div className="text-xs font-medium text-foreground">Recent lines</div>
-                      <ul className="mt-2 max-h-56 space-y-2 overflow-y-auto text-[11px]">
-                        {drillData.transactions.length === 0 ? (
-                          <li className="text-muted-foreground">No transactions match this slice.</li>
-                        ) : (
-                          drillData.transactions.map((t) => (
-                            <li
-                              key={t.id}
-                              className="flex cursor-pointer flex-col gap-0.5 rounded-md border bg-muted/20 px-2 py-1.5 transition hover:bg-muted/50 active:scale-[0.99]"
-                              onClick={() => setSelectedTxId(t.id)}
-                              role="button"
-                              tabIndex={0}
-                              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setSelectedTxId(t.id); }}
-                              aria-label={`Edit transaction: ${t.merchant ?? t.memo ?? "entry"}`}
-                            >
-                              <div className="flex justify-between gap-2">
-                                <span className="font-medium text-foreground">
-                                  {t.direction === "out" ? "Out" : "In"} · {formatMoney(t.amountCents, data.displayCurrency)}
-                                </span>
-                                <span className="shrink-0 text-muted-foreground">
-                                  {t.occurredAt.slice(0, 10)}
-                                </span>
-                              </div>
-                              <div className="text-muted-foreground">
-                                {t.walletName} · {t.categoryName}
-                              </div>
-                              {(t.merchant || t.memo) && (
-                                <div className="truncate text-muted-foreground">{t.merchant ?? t.memo}</div>
+                    {drill.lens === "category" ? (
+                      <>
+                        <div className="rounded-xl border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+                          {drill.level === "year"
+                            ? "Tap a year to narrow to months."
+                            : drill.level === "month"
+                              ? "Tap a month to narrow to weeks."
+                              : drill.level === "week"
+                                ? "Tap a week to open transactions."
+                                : "Transactions for the selected week."}
+                        </div>
+                        <DrillBucketGrid
+                          buckets={drillData.buckets}
+                          flow={drill.flow}
+                          currency={data.displayCurrency}
+                          level={drill.level}
+                          onSelect={handleCategoryBucketSelect}
+                          modeLabel={drill.level}
+                        />
+                        {drill.level === "transaction" ? (
+                          <div className="mt-5 border-t pt-3">
+                            <div className="text-xs font-medium text-foreground">Transactions</div>
+                            <ul className="mt-2 max-h-56 space-y-2 overflow-y-auto text-[11px]">
+                              {drillData.transactions.length === 0 ? (
+                                <li className="text-muted-foreground">No transactions match this slice.</li>
+                              ) : (
+                                drillData.transactions.map((t) => (
+                                  <li
+                                    key={t.id}
+                                    className="flex cursor-pointer flex-col gap-0.5 rounded-md border bg-muted/20 px-2 py-1.5 transition hover:bg-muted/50 active:scale-[0.99]"
+                                    onClick={() => setSelectedTxId(t.id)}
+                                    role="button"
+                                    tabIndex={0}
+                                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setSelectedTxId(t.id); }}
+                                    aria-label={`Edit transaction: ${t.merchant ?? t.memo ?? "entry"}`}
+                                  >
+                                    <div className="flex justify-between gap-2">
+                                      <span className="font-medium text-foreground">
+                                        {t.direction === "out" ? "Out" : "In"} · {formatMoney(t.amountCents, data.displayCurrency)}
+                                      </span>
+                                      <span className="shrink-0 text-muted-foreground">
+                                        {t.occurredAt.slice(0, 10)}
+                                      </span>
+                                    </div>
+                                    <div className="text-muted-foreground">
+                                      {t.walletName} · {t.categoryName}
+                                    </div>
+                                    {(t.merchant || t.memo) && (
+                                      <div className="truncate text-muted-foreground">{t.merchant ?? t.memo}</div>
+                                    )}
+                                  </li>
+                                ))
                               )}
-                            </li>
-                          ))
-                        )}
-                      </ul>
-                    </div>
+                            </ul>
+                          </div>
+                        ) : null}
+                      </>
+                    ) : (
+                      <>
+                        <SeriesChart series={drillData.series} currency={data.displayCurrency} />
+                        <div className="mt-5 border-t pt-3">
+                          <div className="text-xs font-medium text-foreground">Recent lines</div>
+                          <ul className="mt-2 max-h-56 space-y-2 overflow-y-auto text-[11px]">
+                            {drillData.transactions.length === 0 ? (
+                              <li className="text-muted-foreground">No transactions match this slice.</li>
+                            ) : (
+                              drillData.transactions.map((t) => (
+                                <li
+                                  key={t.id}
+                                  className="flex cursor-pointer flex-col gap-0.5 rounded-md border bg-muted/20 px-2 py-1.5 transition hover:bg-muted/50 active:scale-[0.99]"
+                                  onClick={() => setSelectedTxId(t.id)}
+                                  role="button"
+                                  tabIndex={0}
+                                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setSelectedTxId(t.id); }}
+                                  aria-label={`Edit transaction: ${t.merchant ?? t.memo ?? "entry"}`}
+                                >
+                                  <div className="flex justify-between gap-2">
+                                    <span className="font-medium text-foreground">
+                                      {t.direction === "out" ? "Out" : "In"} · {formatMoney(t.amountCents, data.displayCurrency)}
+                                    </span>
+                                    <span className="shrink-0 text-muted-foreground">
+                                      {t.occurredAt.slice(0, 10)}
+                                    </span>
+                                  </div>
+                                  <div className="text-muted-foreground">
+                                    {t.walletName} · {t.categoryName}
+                                  </div>
+                                  {(t.merchant || t.memo) && (
+                                    <div className="truncate text-muted-foreground">{t.merchant ?? t.memo}</div>
+                                  )}
+                                </li>
+                              ))
+                            )}
+                          </ul>
+                        </div>
+                      </>
+                    )}
                   </>
                 ) : null}
               </motion.div>
@@ -542,7 +975,7 @@ export function DashboardInsights({
                     valueKey="expenseCents"
                     enableCircleChart
                     onBarTap={(row) =>
-                      loadDrill({ lens: "category", categoryId: row.categoryId, name: row.name, flow: "out" })
+                      loadDrill({ lens: "category", categoryId: row.categoryId, name: row.name, flow: "out", level: "year" })
                     }
                   />
                   <InteractiveChartBlock<CategoryRow>
@@ -552,7 +985,7 @@ export function DashboardInsights({
                     valueKey="incomeCents"
                     enableCircleChart
                     onBarTap={(row) =>
-                      loadDrill({ lens: "category", categoryId: row.categoryId, name: row.name, flow: "in" })
+                      loadDrill({ lens: "category", categoryId: row.categoryId, name: row.name, flow: "in", level: "year" })
                     }
                   />
 
