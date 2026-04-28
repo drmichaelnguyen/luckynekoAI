@@ -7,6 +7,7 @@ This app is set up to run locally on port `3200` and be exposed through the exis
 - Production build succeeds with `npm run build`.
 - DNS record created for `luckyneko.cozorohome.com`.
 - Launch agent template added at `deploy/launchd/com.luckyneko.app.plist`.
+- Private user media, including generated category icons under `/api/media/...`, is served behind authentication. If you render those URLs in Next.js, bypass `next/image` optimization or use a plain `<img>` so the optimizer does not fetch them without a session cookie.
 
 ## One-time app setup
 

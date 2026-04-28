@@ -71,7 +71,15 @@ function CategoryRow({ category, isPending, startTransition, onRefresh }: { cate
         <div className="flex items-center gap-3">
           <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full bg-muted">
             {category.icon ? (
-              <Image src={category.icon} alt={category.name} width={32} height={32} className="h-full w-full object-cover" />
+              <Image
+                src={category.icon}
+                alt={category.name}
+                width={32}
+                height={32}
+                sizes="32px"
+                unoptimized={category.icon.startsWith("/api/media/")}
+                className="h-full w-full object-cover"
+              />
             ) : (
               <ImageIcon className="h-4 w-4 text-muted-foreground" />
             )}
@@ -105,7 +113,7 @@ function CategoryRow({ category, isPending, startTransition, onRefresh }: { cate
                     });
                   }}
                 >
-                  <Image src={icon} alt="Icon" width={40} height={40} className="object-cover" />
+                  <Image src={icon} alt="Icon" width={40} height={40} sizes="40px" className="object-cover" />
                 </button>
               ))}
             </div>
