@@ -26,6 +26,12 @@ export type GitUpdateResult = {
   restartQueued: boolean;
 };
 
+export type GitMutationResult = {
+  branch: string;
+  output: string;
+  commitHash: string | null;
+};
+
 async function runCommand(command: string, args: string[], options: ExecFileOptions = {}) {
   const { stdout, stderr } = await execFileAsync(command, args, {
     cwd: REPO_ROOT,
@@ -118,5 +124,44 @@ export async function updateFromGitAndRestart(): Promise<GitUpdateResult> {
       .join("\n"),
     buildOutput: [buildResult.stdout, buildResult.stderr].filter(Boolean).map(trim).filter(Boolean).join("\n"),
     restartQueued: uid != null,
+  };
+}
+
+export async function pushCurrentBranch(): Promise<GitMutationResult> {
+  const status = await readGitStatusInfo();
+  const branch = status.branch === "HEAD" ? "main" : status.branch;
+  const pushResult = await runCommand("git", ["push", "origin", branch]);
+  return {
+    branch,
+    commitHash: status.commit,
+    output: [pushResult.stdout, pushResult.stderr].filter(Boolean).map(trim).filter(Boolean).join("\n"),
+  };
+}
+
+export async function commitAndPushCurrentBranch(message: string): Promise<GitMutationResult> {
+  const trimmedMessage = message.trim();
+  if (!trimmedMessage) {
+    throw new Error("Commit message is required.");
+  }
+
+  const status = await readGitStatusInfo();
+  if (!status.dirty) {
+    throw new Error("There are no local changes to commit.");
+  }
+
+  const branch = status.branch === "HEAD" ? "main" : status.branch;
+  const addResult = await runCommand("git", ["add", "-A"]);
+  const commitResult = await runCommand("git", ["commit", "-m", trimmedMessage]);
+  const nextHead = await runCommand("git", ["rev-parse", "HEAD"]);
+  const pushResult = await runCommand("git", ["push", "origin", branch]);
+
+  return {
+    branch,
+    commitHash: trim(nextHead.stdout) || status.commit,
+    output: [addResult.stdout, addResult.stderr, commitResult.stdout, commitResult.stderr, pushResult.stdout, pushResult.stderr]
+      .filter(Boolean)
+      .map(trim)
+      .filter(Boolean)
+      .join("\n"),
   };
 }

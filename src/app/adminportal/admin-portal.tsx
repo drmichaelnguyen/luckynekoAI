@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 
 import {
+  commitAndPushAdminPortalAction,
   getAdminPortalSnapshotAction,
   pullAndRestartAdminPortalAction,
   listUsersAction,
   resetUserPasswordAction,
+  pushAdminPortalAction,
   updateAdminRuntimeSettingsAction,
   setUserRoleAction,
   type AdminPortalSnapshot,
@@ -61,6 +63,8 @@ export function AdminPortal() {
   const [releaseMsg, setReleaseMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [settings, setSettings] = useState<AdminRuntimeSettings | null>(null);
   const [settingsMsg, setSettingsMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  const [gitMessage, setGitMessage] = useState<{ text: string; ok: boolean } | null>(null);
+  const [commitMessage, setCommitMessage] = useState("");
   const [isPending, startTransition] = useTransition();
 
   const refresh = useCallback(() => {
@@ -91,6 +95,11 @@ export function AdminPortal() {
   function flashSettings(text: string, ok: boolean) {
     setSettingsMsg({ text, ok });
     window.setTimeout(() => setSettingsMsg(null), 5000);
+  }
+
+  function flashGit(text: string, ok: boolean) {
+    setGitMessage({ text, ok });
+    window.setTimeout(() => setGitMessage(null), 7000);
   }
 
   function updateRouting<K extends keyof AdminRuntimeSettings["routing"]>(
@@ -160,6 +169,32 @@ export function AdminPortal() {
         refresh();
       } else {
         flashRelease(res.error ?? "Update failed", false);
+      }
+    });
+  }
+
+  function handleCommitAndPush() {
+    if (!commitMessage.trim()) return;
+    startTransition(async () => {
+      const res = await commitAndPushAdminPortalAction(commitMessage.trim());
+      if (res.ok) {
+        flashGit(res.message, true);
+        setCommitMessage("");
+        refresh();
+      } else {
+        flashGit(res.error ?? "Commit/push failed", false);
+      }
+    });
+  }
+
+  function handlePush() {
+    startTransition(async () => {
+      const res = await pushAdminPortalAction();
+      if (res.ok) {
+        flashGit(res.message, true);
+        refresh();
+      } else {
+        flashGit(res.error ?? "Push failed", false);
       }
     });
   }
@@ -267,6 +302,45 @@ export function AdminPortal() {
                 {releaseMsg.text}
               </div>
             ) : null}
+          </section>
+
+          <section className="rounded-lg border bg-card">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/30 px-4 py-3">
+              <div>
+                <h2 className="text-sm font-semibold">Git Commands</h2>
+                <p className="text-xs text-muted-foreground">
+                  Common admin actions for publishing local changes without opening a shell.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="outline" onClick={handlePush} disabled={isPending}>
+                  Push branch
+                </Button>
+                <Button type="button" onClick={handleCommitAndPush} disabled={isPending || !commitMessage.trim()}>
+                  Commit and push
+                </Button>
+              </div>
+            </div>
+            <div className="space-y-4 p-4">
+              <label className="block space-y-1 text-sm">
+                <span className="text-xs uppercase tracking-wide text-muted-foreground">Commit message</span>
+                <Input
+                  type="text"
+                  value={commitMessage}
+                  onChange={(e) => setCommitMessage(e.target.value)}
+                  placeholder='e.g. "Update admin portal"'
+                  disabled={isPending}
+                />
+              </label>
+              <div className="text-xs text-muted-foreground">
+                Commit and push stages all local changes, then publishes them to the current branch.
+              </div>
+              {gitMessage ? (
+                <div className={cn("rounded-md border px-3 py-2 text-sm", gitMessage.ok ? "text-green-600" : "text-destructive")}>
+                  {gitMessage.text}
+                </div>
+              ) : null}
+            </div>
           </section>
 
           <section className="grid gap-6 xl:grid-cols-2">

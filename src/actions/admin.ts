@@ -10,7 +10,13 @@ import {
 } from "@/lib/admin-runtime-settings";
 import { hasAdminAccess, isAdminEmail, resolveUserRole } from "@/lib/admin-access";
 import { APP_VERSION } from "@/lib/app-version";
-import { readGitStatusInfo, updateFromGitAndRestart, type GitStatusInfo } from "@/lib/git";
+import {
+  commitAndPushCurrentBranch,
+  readGitStatusInfo,
+  pushCurrentBranch,
+  updateFromGitAndRestart,
+  type GitStatusInfo,
+} from "@/lib/git";
 import { prisma } from "@/lib/prisma";
 
 async function requireAdmin() {
@@ -327,6 +333,46 @@ export async function pullAndRestartAdminPortalAction(): Promise<
     return {
       ok: false,
       error: error instanceof Error ? error.message : "Failed to update from git",
+    };
+  }
+}
+
+export async function commitAndPushAdminPortalAction(
+  commitMessage: string,
+): Promise<{ ok: true; message: string; branch: string } | { ok: false; error: string }> {
+  await requireAdmin();
+
+  try {
+    const result = await commitAndPushCurrentBranch(commitMessage);
+    return {
+      ok: true,
+      message: result.output || `Committed changes and pushed ${result.branch}.`,
+      branch: result.branch,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Failed to commit and push changes",
+    };
+  }
+}
+
+export async function pushAdminPortalAction(): Promise<
+  { ok: true; message: string; branch: string } | { ok: false; error: string }
+> {
+  await requireAdmin();
+
+  try {
+    const result = await pushCurrentBranch();
+    return {
+      ok: true,
+      message: result.output || `Pushed ${result.branch}.`,
+      branch: result.branch,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Failed to push changes",
     };
   }
 }
