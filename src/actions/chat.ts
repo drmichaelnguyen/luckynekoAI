@@ -2,6 +2,7 @@
 
 import { GoogleGenerativeAI, type Part } from "@google/generative-ai";
 import { randomUUID } from "node:crypto";
+import { cookies } from "next/headers";
 import { z } from "zod";
 
 import { PENDING_IMPORT_VERSION } from "@/lib/document-import/pending-import-shared";
@@ -25,6 +26,7 @@ import {
   saveChatPreferences,
   mergePreferences,
 } from "@/lib/learning/chat-preferences";
+import { LOCALE_COOKIE, parseLocale, type Locale } from "@/lib/i18n/config";
 import { maybeCompressImageForStorage } from "@/lib/media/compress-image-for-storage";
 import {
   assertAllowedChatMime,
@@ -165,7 +167,7 @@ export async function acknowledgeShareImportAction(id: string): Promise<void> {
   acknowledgeShareImport(id.trim());
 }
 
-const SYSTEM_INSTRUCTION = `You are NekoZeni, a friendly lucky-cat-themed finance assistant for people in Canada and Vietnam. You are fully bilingual and speak fluidly in both English and Vietnamese. Reply naturally in the language the user speaks to you (or bilingual if requested).
+const SYSTEM_INSTRUCTION_BASE = `You are NekoZeni, a friendly lucky-cat-themed finance assistant for people in Canada and Vietnam. You are fully bilingual and speak fluidly in both English and Vietnamese. Reply naturally in the language the user speaks to you (or bilingual if requested).
 You MUST respond with JSON only (no markdown fences).
 
 Your JSON MUST match this shape (optional keys only when relevant):
@@ -303,6 +305,21 @@ Purchase intent — CRITICAL:
 
 assistantMessage should be a concise, human summary of what you understood (1-3 sentences), not raw JSON.`;
 
+function buildSystemInstruction(locale: Locale): string {
+  const localeHint =
+    locale === "vi"
+      ? [
+          "The user selected Vietnamese in the app.",
+          "Reply in Vietnamese by default for assistantMessage and followUpQuestion unless the user explicitly asks for English.",
+        ].join(" ")
+      : [
+          "The user selected English in the app.",
+          "Reply in English by default for assistantMessage and followUpQuestion unless the user explicitly asks for Vietnamese.",
+        ].join(" ");
+
+  return `${SYSTEM_INSTRUCTION_BASE}\n\nLocale preference:\n- ${localeHint}`;
+}
+
 const ConversationTurnSchema = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string(),
@@ -418,6 +435,8 @@ export async function handleChatInput(formData: FormData) {
   }
   const userId = session.user.id;
   const adminSettings = await loadAdminRuntimeSettings();
+  const localeCookieStore = await cookies();
+  const locale = parseLocale(localeCookieStore.get(LOCALE_COOKIE)?.value);
 
   const message = String(formData.get("message") ?? "").trim();
   const shareContextRaw = String(formData.get("shareContext") ?? "").trim();
@@ -492,7 +511,7 @@ export async function handleChatInput(formData: FormData) {
   const model = apiKey
     ? new GoogleGenerativeAI(apiKey).getGenerativeModel({
         model: modelName,
-        systemInstruction: SYSTEM_INSTRUCTION,
+        systemInstruction: buildSystemInstruction(locale),
         generationConfig: {
           temperature: 0.15,
           responseMimeType: "application/json",
@@ -643,7 +662,7 @@ export async function handleChatInput(formData: FormData) {
           usage = usageFromGeminiResult(rawText);
         } else {
           const rawText = await call9RouterChatCompletion({
-            systemInstruction: SYSTEM_INSTRUCTION,
+            systemInstruction: buildSystemInstruction(locale),
             userPrompt: prompt,
             temperature: 0.15,
             attachments: preparedAttachments,

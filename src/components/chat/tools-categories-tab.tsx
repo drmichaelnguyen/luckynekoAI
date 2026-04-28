@@ -112,10 +112,10 @@ function CategoryRow({ category, isPending, startTransition, onRefresh }: { cate
           </div>
 
           <div>
-            <div className="text-[10px] font-semibold mb-2">Or generate with AI (Anime Style):</div>
+            <div className="text-[10px] font-semibold mb-2">Generate a custom icon with AI:</div>
             <div className="flex gap-2">
               <Input
-                placeholder="e.g., A cute cat drinking boba"
+                placeholder="Leave blank to use the category name, or describe the icon"
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 className="h-8 text-xs"
@@ -124,11 +124,11 @@ function CategoryRow({ category, isPending, startTransition, onRefresh }: { cate
               <Button
                 size="sm"
                 className="h-8 gap-1"
-                disabled={!prompt.trim() || isPending || loading}
+                disabled={isPending || loading}
                 onClick={() => {
                   setLoading(true);
                   startTransition(() => {
-                    generateCategoryIconAction(category.id, prompt).then(() => {
+                    generateCategoryIconAction(category.id, prompt.trim()).then(() => {
                       setLoading(false);
                       setEditing(false);
                       onRefresh();
@@ -137,8 +137,11 @@ function CategoryRow({ category, isPending, startTransition, onRefresh }: { cate
                 }}
               >
                 {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
-                Generate
+                Generate icon
               </Button>
+            </div>
+            <div className="mt-1 text-[10px] text-muted-foreground">
+              9router image creation will use the category name automatically if you don&apos;t type a prompt.
             </div>
           </div>
         </div>

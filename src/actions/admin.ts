@@ -6,9 +6,9 @@ import { auth } from "@/auth";
 import {
   call9RouterChatCompletion,
   DEFAULT_9ROUTER_MODEL,
-  has9RouterConfig,
   normalize9RouterModel,
 } from "@/lib/ai/9router";
+import { callIconImageGeneration } from "@/lib/ai/image-generation";
 import { recordAiRequestLog } from "@/lib/ai/telemetry";
 import {
   loadAdminRuntimeSettings,
@@ -337,6 +337,18 @@ export type AdminModelTestResult =
     }
   | { ok: false; provider: "9router"; model: string; error: string };
 
+export type AdminImageTestResult =
+  | {
+      ok: true;
+      provider: "9router" | "gemini";
+      model: string;
+      prompt: string;
+      imageUrl: string;
+      requestUrl: string;
+      latencyMs: number;
+    }
+  | { ok: false; provider: "9router" | "gemini"; model: string; prompt: string; requestUrl: string; error: string };
+
 export async function testAdminModelAction(input: {
   model: string;
   url?: string;
@@ -344,9 +356,6 @@ export async function testAdminModelAction(input: {
   await requireAdmin();
 
   const model = normalize9RouterModel(input.model, DEFAULT_9ROUTER_MODEL);
-  if (!has9RouterConfig()) {
-    return { ok: false, provider: "9router", model, error: "Server is missing NINE_ROUTER_API_KEY." };
-  }
 
   const startedAt = Date.now();
   try {
@@ -386,6 +395,61 @@ export async function testAdminModelAction(input: {
       errorMessage: message,
     });
     return { ok: false, provider: "9router", model, error: message };
+  }
+}
+
+export async function testAdminImageAction(input: {
+  model?: string;
+  prompt: string;
+  url?: string;
+  mode?: "auto" | "9router" | "gemini";
+}): Promise<AdminImageTestResult> {
+  await requireAdmin();
+
+  const model = normalize9RouterModel(input.model, "image-creation");
+  const prompt = input.prompt.trim();
+  const requestUrl = input.url?.trim() || "";
+  if (!prompt) {
+    return { ok: false, provider: "9router", model, prompt: "", requestUrl, error: "Enter a prompt for image generation." };
+  }
+
+  const startedAt = Date.now();
+  try {
+    const result = await callIconImageGeneration({
+      prompt,
+      nineRouterModel: model,
+      nineRouterUrl: input.url,
+      mode: input.mode ?? "auto",
+    });
+
+    await recordAiRequestLog({
+      feature: "admin_image_test",
+      provider: result.provider,
+      model: result.model,
+      success: true,
+      latencyMs: Date.now() - startedAt,
+    });
+
+    return {
+      ok: true,
+      provider: result.provider,
+      model: result.model,
+      prompt,
+      imageUrl: result.imageUrl,
+      requestUrl: result.requestUrl,
+      latencyMs: Date.now() - startedAt,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Image test failed";
+    await recordAiRequestLog({
+      feature: "admin_image_test",
+      provider: "9router",
+      model,
+      success: false,
+      latencyMs: Date.now() - startedAt,
+      errorMessage: message,
+    });
+    return { ok: false, provider: "9router", model, prompt, requestUrl, error: message };
   }
 }
 

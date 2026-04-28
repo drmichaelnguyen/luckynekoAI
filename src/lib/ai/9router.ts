@@ -12,6 +12,9 @@ type ChatCompletionResponse = {
     message?: {
       content?: string | Array<{ type?: string; text?: string }>;
     };
+    delta?: {
+      content?: string | Array<{ type?: string; text?: string }>;
+    };
   }>;
   error?: { message?: string };
   usage?: {
@@ -21,14 +24,13 @@ type ChatCompletionResponse = {
   };
 };
 
-// Default to the supported 9router GPT-5 target. Do not assume a separate mini alias exists.
+// Default to the supported 9router GPT-5 target. Callers may still override with a router-specific alias.
 export const DEFAULT_9ROUTER_MODEL = "gpt-5";
 export const LARGE_9ROUTER_MODEL = "gpt-5";
 
 export function normalize9RouterModel(value: string | null | undefined, fallback: string): string {
   const trimmed = typeof value === "string" ? value.trim() : "";
-  // These legacy placeholders and unsupported mini aliases get rejected by the upstream API.
-  if (!trimmed || trimmed === "mini_models" || trimmed === "gpt-5-mini") return fallback;
+  if (!trimmed) return fallback;
   return trimmed;
 }
 
@@ -56,8 +58,61 @@ function contentToText(content: string | Array<{ type?: string; text?: string }>
   return "";
 }
 
+async function readChatCompletionResponse(response: Response): Promise<ChatCompletionResponse | null> {
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  if (contentType.includes("text/event-stream")) {
+    const raw = await response.text();
+    const chunks: string[] = [];
+    let usage: ChatCompletionResponse["usage"] | undefined;
+    let error: ChatCompletionResponse["error"] | undefined;
+
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      try {
+        const parsed = JSON.parse(payload) as ChatCompletionResponse;
+        const choice = parsed.choices?.[0];
+        const text = contentToText(choice?.delta?.content) || contentToText(choice?.message?.content);
+        if (text) chunks.push(text);
+        if (parsed.usage) usage = parsed.usage;
+        if (parsed.error) error = parsed.error;
+      } catch {
+        // Ignore malformed SSE frames and keep collecting valid chunks.
+      }
+    }
+
+    return {
+      choices: chunks.length
+        ? [
+            {
+              message: {
+                content: chunks.join(""),
+              },
+            },
+          ]
+        : undefined,
+      error,
+      usage,
+    };
+  }
+
+  return (await response.json().catch(() => null)) as ChatCompletionResponse | null;
+}
+
 export function has9RouterConfig(): boolean {
   return Boolean(get9RouterConfig());
+}
+
+export function resolve9RouterImageGenerationUrl(url?: string): string {
+  const config = get9RouterConfig();
+  if (!config) {
+    throw new Error("Server is missing NINE_ROUTER_API_KEY.");
+  }
+
+  const source = url?.trim() || config.url;
+  const baseUrl = source.includes("/v1/") ? source.split("/v1/")[0] : config.url.split("/v1/")[0];
+  return `${baseUrl}/v1/images/generations`;
 }
 
 export async function call9RouterChatCompletion(input: {
@@ -117,7 +172,7 @@ export async function call9RouterChatCompletion(input: {
     }),
   });
 
-  const body = (await response.json().catch(() => null)) as ChatCompletionResponse | null;
+  const body = await readChatCompletionResponse(response);
   if (!response.ok) {
     throw new Error(body?.error?.message || `9router request failed with HTTP ${response.status}.`);
   }
@@ -143,9 +198,8 @@ export async function call9RouterImageGeneration(input: {
   if (!config) {
     throw new Error("Server is missing NINE_ROUTER_API_KEY.");
   }
-  
-  const baseUrl = config.url.split("/v1/")[0];
-  const requestUrl = input.url?.trim() || `${baseUrl}/v1/images/generations`;
+
+  const requestUrl = resolve9RouterImageGenerationUrl(input.url);
   
   const response = await fetch(requestUrl, {
     method: "POST",

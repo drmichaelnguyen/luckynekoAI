@@ -2,7 +2,8 @@
 
 import crypto from "crypto";
 import { auth } from "@/auth";
-import { call9RouterImageGeneration } from "@/lib/ai/9router";
+import { call9RouterChatCompletion } from "@/lib/ai/9router";
+import { callIconImageGeneration, loadGeneratedImageBuffer, normalizeIconImageBuffer } from "@/lib/ai/image-generation";
 import { writeUserMediaFile } from "@/lib/media/user-media-storage";
 import {
   defaultNextReminderAt,
@@ -502,32 +503,63 @@ export async function generateCategoryIconAction(categoryId: string, prompt: str
   
   const category = await prisma.category.findFirst({
     where: { id: categoryId, userId: session.user.id },
+    include: { parent: true },
   });
   if (!category) return { ok: false, error: "Category not found." };
 
   try {
-    const fullPrompt = `A vibrant anime-style icon of ${prompt}, clean flat design, transparent or solid bright background, suitable for a mobile app category icon.`;
-    const resultUrl = await call9RouterImageGeneration({ prompt: fullPrompt });
-    
-    let buffer: Buffer;
-    let mime = "image/png";
-    if (resultUrl.startsWith("data:")) {
-      const match = resultUrl.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
-      if (match) {
-        mime = match[1];
-        buffer = Buffer.from(match[2], "base64");
-      } else {
-        throw new Error("Invalid base64 image data");
+    const categoryPath = category.parent ? `${category.parent.name} > ${category.name}` : category.name;
+    const userPrompt = prompt.trim() || categoryPath;
+    const promptRewrite = [
+      "You write concise image-generation prompts for finance app icons.",
+      "Rewrite the input as a single prompt for a square icon image used in a money management app.",
+      "The app is a money management / finance app called NekoZeni.",
+      "Use the category context and user request together to decide the symbol.",
+      "Prioritize a single, obvious object or symbol that reads well at 24px to 64px.",
+      "The image should feel polished, modern, friendly, and instantly readable at small sizes.",
+      "No text, no watermark, no screenshot, no UI mockup, no collage, and no clutter.",
+      "Keep it focused on one centered subject with generous padding and a transparent background when possible.",
+      "Return only the rewritten prompt text.",
+    ].join(" ");
+    const promptSource = [
+      `Category context: ${categoryPath}`,
+      `User prompt: ${userPrompt}`,
+      "Injected app context: NekoZeni is a money management app, so the icon must work as a compact category chip in a financial dashboard.",
+      "Design direction: flat, bold, centered, minimal, friendly, and optimized for a wallet/spending tracker interface.",
+    ].join("\n");
+
+    let fullPrompt = [
+      `Create a custom mobile app category icon for "${categoryPath}" in NekoZeni, a money management app.`,
+      `The icon should depict: ${userPrompt}.`,
+      "Interpret the category context and the user's prompt together; do not ignore either one.",
+      "Use a clean, bold, easy-to-recognize flat design with a centered composition and strong silhouette.",
+      "Keep it square, with no text, and use a transparent background or a very simple solid background.",
+      "Make it suitable for a finance app category chip and readable at thumbnail size.",
+    ].join(" ");
+
+    try {
+      const promptResult = await call9RouterChatCompletion({
+        systemInstruction: promptRewrite,
+        userPrompt: promptSource,
+        temperature: 0.2,
+      });
+      const rewritten = promptResult.text.trim().replace(/^["'`]+|["'`]+$/g, "");
+      if (rewritten) {
+        fullPrompt = rewritten;
       }
-    } else {
-      const res = await fetch(resultUrl);
-      if (!res.ok) throw new Error("Failed to download generated image");
-      buffer = Buffer.from(await res.arrayBuffer());
-      mime = res.headers.get("content-type") || "image/png";
+    } catch {
+      // Fall back to the local prompt when prompt rewriting is unavailable.
     }
 
+    const result = await callIconImageGeneration({
+      prompt: fullPrompt,
+      nineRouterModel: "image-creation",
+    });
+    const raw = await loadGeneratedImageBuffer(result.imageUrl);
+    const normalized = await normalizeIconImageBuffer(raw);
+
     const id = crypto.randomUUID();
-    const relativePath = await writeUserMediaFile(session.user.id, id, mime, buffer);
+    const relativePath = await writeUserMediaFile(session.user.id, id, normalized.mimeType, normalized.buffer);
     const apiPath = `/api/media/${relativePath}`;
 
     await prisma.category.update({

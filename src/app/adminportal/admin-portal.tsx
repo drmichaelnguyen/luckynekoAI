@@ -9,6 +9,7 @@ import {
   listUsersAction,
   resetUserPasswordAction,
   pushAdminPortalAction,
+  testAdminImageAction,
   testAdminModelAction,
   updateAdminRuntimeSettingsAction,
   setUserRoleAction,
@@ -65,6 +66,12 @@ export function AdminPortal() {
   const [settings, setSettings] = useState<AdminRuntimeSettings | null>(null);
   const [settingsMsg, setSettingsMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [modelTestMsg, setModelTestMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  const [imageTestMsg, setImageTestMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  const [imageTestMode, setImageTestMode] = useState<"auto" | "9router" | "gemini">("auto");
+  const [imageTestPrompt, setImageTestPrompt] = useState(
+    "Create a square finance app icon for a money management app called NekoZeni. Show a friendly wallet with a coin, flat vector style, clean centered composition, teal and gold palette, transparent background, no text.",
+  );
+  const [imageTestResult, setImageTestResult] = useState<{ prompt: string; imageUrl: string; model: string; provider: string; latencyMs: number; requestUrl: string } | null>(null);
   const [gitMessage, setGitMessage] = useState<{ text: string; ok: boolean } | null>(null);
   const [commitMessage, setCommitMessage] = useState("");
   const [isPending, startTransition] = useTransition();
@@ -102,6 +109,11 @@ export function AdminPortal() {
   function flashModelTest(text: string, ok: boolean) {
     setModelTestMsg({ text, ok });
     window.setTimeout(() => setModelTestMsg(null), 7000);
+  }
+
+  function flashImageTest(text: string, ok: boolean) {
+    setImageTestMsg({ text, ok });
+    window.setTimeout(() => setImageTestMsg(null), 7000);
   }
 
   function flashGit(text: string, ok: boolean) {
@@ -231,6 +243,32 @@ export function AdminPortal() {
         flashModelTest(`${label} worked: ${res.model} replied "${res.response}" in ${res.latencyMs} ms.${usageText}`, true);
       } else {
         flashModelTest(`${label} failed: ${res.error}`, false);
+      }
+    });
+  }
+
+  function handleTestImage(model: string) {
+    const prompt = imageTestPrompt.trim();
+    startTransition(async () => {
+      const res = await testAdminImageAction({
+        model,
+        prompt,
+        url: settings?.routing.nineRouterUrl,
+        mode: imageTestMode,
+      });
+      if (res.ok) {
+        setImageTestResult({
+          prompt: res.prompt,
+          imageUrl: res.imageUrl,
+          model: res.model,
+          provider: res.provider,
+          latencyMs: res.latencyMs,
+          requestUrl: res.requestUrl,
+        });
+        flashImageTest(`Image test worked: ${res.model} returned an image in ${res.latencyMs} ms.`, true);
+      } else {
+        setImageTestResult(null);
+        flashImageTest(`Image test failed: ${res.error}`, false);
       }
     });
   }
@@ -471,6 +509,68 @@ export function AdminPortal() {
                     {modelTestMsg.text}
                   </div>
                 ) : null}
+                <div className="mt-2 rounded-md border bg-muted/20 p-3">
+                  <div className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">Image creation test</div>
+                  <label className="block space-y-1 text-sm">
+                    <span className="text-xs uppercase tracking-wide text-muted-foreground">Prompt</span>
+                    <textarea
+                      className="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm outline-none ring-0 placeholder:text-muted-foreground focus:border-primary"
+                      value={imageTestPrompt}
+                      onChange={(e) => setImageTestPrompt(e.target.value)}
+                      disabled={!settings || isPending}
+                      placeholder="Describe the icon or image to generate"
+                    />
+                  </label>
+                  <label className="block space-y-1 text-sm mt-3">
+                    <span className="text-xs uppercase tracking-wide text-muted-foreground">Mode</span>
+                    <select
+                      className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                      value={imageTestMode}
+                      onChange={(e) => setImageTestMode(e.target.value as "auto" | "9router" | "gemini")}
+                      disabled={!settings || isPending}
+                    >
+                      <option value="auto">Auto fallback</option>
+                      <option value="9router">9router only</option>
+                      <option value="gemini">Gemini only</option>
+                    </select>
+                  </label>
+                  <div className="mt-3 flex flex-wrap justify-end gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => handleTestImage("image-creation")}
+                      disabled={!settings || isPending}
+                    >
+                      Test image-creation
+                    </Button>
+                  </div>
+                  {imageTestMsg ? (
+                    <div className={cn("mt-3 rounded-md border px-3 py-2 text-sm", imageTestMsg.ok ? "text-green-600" : "text-destructive")}>
+                      {imageTestMsg.text}
+                    </div>
+                  ) : null}
+                  {imageTestResult ? (
+                    <div className="mt-3 space-y-3">
+                      <div className="rounded-md border bg-background p-2">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={imageTestResult.imageUrl}
+                          alt="9router image test result"
+                          className="max-h-80 w-full rounded-md object-contain"
+                        />
+                      </div>
+                      <div className="space-y-1 rounded-md border bg-background px-3 py-2 text-xs">
+                        <div><span className="font-medium">Model:</span> {imageTestResult.model}</div>
+                        <div><span className="font-medium">Provider:</span> {imageTestResult.provider}</div>
+                        <div><span className="font-medium">Mode:</span> {imageTestMode}</div>
+                        <div><span className="font-medium">Latency:</span> {imageTestResult.latencyMs} ms</div>
+                        <div className="break-words"><span className="font-medium">Endpoint:</span> {imageTestResult.requestUrl}</div>
+                        <div className="break-words"><span className="font-medium">Prompt:</span> {imageTestResult.prompt}</div>
+                        <div className="break-words"><span className="font-medium">Source:</span> {imageTestResult.imageUrl}</div>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </div>
 
