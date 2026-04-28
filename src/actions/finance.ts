@@ -1,6 +1,9 @@
 "use server";
 
+import crypto from "crypto";
 import { auth } from "@/auth";
+import { call9RouterImageGeneration } from "@/lib/ai/9router";
+import { writeUserMediaFile } from "@/lib/media/user-media-storage";
 import {
   defaultNextReminderAt,
   parseCadenceInput,
@@ -88,6 +91,7 @@ export async function listPendingTransactionsAction() {
       confirmReason: t.confirmReason,
       walletName: t.wallet.name,
       categoryName: t.category?.name ?? "Other",
+      categoryIcon: t.category?.icon ?? null,
     })),
   };
 }
@@ -480,3 +484,80 @@ export async function updateTransactionAction(
 
   return { ok: true };
 }
+
+export async function updateCategoryIconAction(categoryId: string, iconPath: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false, error: "Unauthorized" };
+  await prisma.category.updateMany({
+    where: { id: categoryId, userId: session.user.id },
+    data: { icon: iconPath },
+  });
+  return { ok: true };
+}
+
+export async function generateCategoryIconAction(categoryId: string, prompt: string): Promise<{ ok: true; icon: string } | { ok: false; error: string }> {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false, error: "Unauthorized" };
+  
+  const category = await prisma.category.findFirst({
+    where: { id: categoryId, userId: session.user.id },
+  });
+  if (!category) return { ok: false, error: "Category not found." };
+
+  try {
+    const fullPrompt = `A vibrant anime-style icon of ${prompt}, clean flat design, transparent or solid bright background, suitable for a mobile app category icon.`;
+    const resultUrl = await call9RouterImageGeneration({ prompt: fullPrompt });
+    
+    let buffer: Buffer;
+    let mime = "image/png";
+    if (resultUrl.startsWith("data:")) {
+      const match = resultUrl.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
+      if (match) {
+        mime = match[1];
+        buffer = Buffer.from(match[2], "base64");
+      } else {
+        throw new Error("Invalid base64 image data");
+      }
+    } else {
+      const res = await fetch(resultUrl);
+      if (!res.ok) throw new Error("Failed to download generated image");
+      buffer = Buffer.from(await res.arrayBuffer());
+      mime = res.headers.get("content-type") || "image/png";
+    }
+
+    const id = crypto.randomUUID();
+    const relativePath = await writeUserMediaFile(session.user.id, id, mime, buffer);
+    const apiPath = `/api/media/${relativePath}`;
+
+    await prisma.category.update({
+      where: { id: categoryId },
+      data: { icon: apiPath },
+    });
+
+    return { ok: true, icon: apiPath };
+  } catch (err: any) {
+    return { ok: false, error: err.message || "Failed to generate icon." };
+  }
+}
+
+export async function listCategoriesAction(): Promise<{ ok: true; categories: CategoryOption[] } | { ok: false; error: string }> {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false, error: "Unauthorized" };
+  const categories = await prisma.category.findMany({
+    where: { userId: session.user.id },
+    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+    select: { id: true, name: true, kind: true, parentId: true, icon: true, parent: { select: { name: true } } },
+  });
+  return {
+    ok: true,
+    categories: categories.map(c => ({
+      id: c.id,
+      name: c.name,
+      kind: c.kind,
+      parentId: c.parentId,
+      parentName: c.parent?.name ?? null,
+      icon: c.icon,
+    }))
+  };
+}
+

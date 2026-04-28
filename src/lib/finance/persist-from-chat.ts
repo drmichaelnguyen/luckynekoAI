@@ -251,3 +251,111 @@ export async function persistTransactionListLedgerEntries(
 
   return { saved: true, detail, transactionIds };
 }
+
+export async function applyLedgerEdit(
+  db: PrismaClient,
+  userId: string,
+  edit: {
+    merchantHint: string | null;
+    dateHint: string | null;
+    newAmount: number | null;
+    newMemo: string | null;
+    newCategory: string | null;
+  }
+): Promise<{ saved: boolean; detail: string; transactionId?: string }> {
+  // Try to find the matching transaction.
+  // We'll look at the last 50 transactions to find a match.
+  const recentTx = await db.transaction.findMany({
+    where: { userId, status: { not: "rejected" } },
+    orderBy: { occurredAt: "desc" },
+    take: 50,
+    include: { category: true }
+  });
+
+  if (recentTx.length === 0) {
+    return { saved: false, detail: "I couldn't find any recent transactions to edit." };
+  }
+
+  let targetTx = recentTx[0]; // default to most recent if no hints
+  
+  if (edit.merchantHint) {
+    const hint = edit.merchantHint.toLowerCase();
+    const match = recentTx.find(tx => 
+      tx.merchant?.toLowerCase().includes(hint) || 
+      tx.memo?.toLowerCase().includes(hint)
+    );
+    if (match) targetTx = match;
+  }
+
+  // Determine what to update
+  const dataToUpdate: Record<string, any> = {};
+  const before: Record<string, any> = {};
+  const after: Record<string, any> = {};
+
+  if (edit.newAmount !== undefined && edit.newAmount !== null) {
+    const amountCents = Math.round(Math.abs(edit.newAmount) * 100);
+    if (amountCents > 0 && targetTx.amountCents !== amountCents) {
+      dataToUpdate.amountCents = amountCents;
+      before.amountCents = targetTx.amountCents;
+      after.amountCents = amountCents;
+    }
+  }
+
+  if (edit.newMemo !== undefined && edit.newMemo !== null) {
+    // If the old memo is different, we update it.
+    // If user says "add comment: business trip", the AI might provide the new full memo or just the comment.
+    // We assume the AI provides the complete desired newMemo.
+    if (targetTx.memo !== edit.newMemo) {
+      dataToUpdate.memo = edit.newMemo;
+      before.memo = targetTx.memo;
+      after.memo = edit.newMemo;
+    }
+  }
+
+  if (edit.newCategory !== undefined && edit.newCategory !== null) {
+    const cat = await findOrCreateCategory({
+      db,
+      userId,
+      label: edit.newCategory,
+      direction: targetTx.direction,
+      fallbackSlug: targetTx.direction === "in" ? "income" : "other"
+    });
+    if (cat && targetTx.categoryId !== cat.id) {
+      dataToUpdate.categoryId = cat.id;
+      before.categoryId = targetTx.categoryId;
+      after.categoryId = cat.id;
+    }
+  }
+
+  if (Object.keys(dataToUpdate).length === 0) {
+    return { 
+      saved: true, 
+      detail: "No changes were needed for this transaction.",
+      transactionId: targetTx.id
+    };
+  }
+
+  let editHistory: any[] = [];
+  try {
+    if (targetTx.editHistoryJson) editHistory = JSON.parse(targetTx.editHistoryJson);
+  } catch { /* ignore */ }
+
+  editHistory.push({
+    editedAt: new Date().toISOString(),
+    before,
+    after
+  });
+
+  dataToUpdate.editHistoryJson = JSON.stringify(editHistory);
+
+  await db.transaction.update({
+    where: { id: targetTx.id },
+    data: dataToUpdate
+  });
+
+  return {
+    saved: true,
+    detail: "Transaction updated successfully.",
+    transactionId: targetTx.id
+  };
+}

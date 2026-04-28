@@ -9,7 +9,7 @@ export type ChatPreferences = {
   detectedAt: string;
 };
 
-const VI_KEYWORDS = ["của", "và", "là", "tôi", "bạn", "tiền", "chi", "mua", "ăn", "ngày", "tháng", "năm", "cho", "em", "anh"];
+const VI_KEYWORDS = ["của", "và", "là", "tôi", "bạn", "tiền", "chi", "mua", "ăn", "ngày", "tháng", "năm", "cho", "em", "anh", "mày", "tao", "nói", "tiếng", "việt", "đi", "xin", "chào", "bot", "nha", "nhé"];
 
 const VI_DIACRITICS = /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/gi;
 
@@ -89,12 +89,10 @@ export function mergePreferences(
     detectedAt: current?.detectedAt ?? new Date().toISOString(),
   };
 
-  // Language: sticky, requires 2+ signals to flip
+  // Language: update to the latest detected language
   if (detected.language) {
-    if (!next.language) {
+    if (next.language !== detected.language) {
       next.language = detected.language;
-    } else if (next.language !== detected.language) {
-      // Don't flip on single signal
     }
   }
 

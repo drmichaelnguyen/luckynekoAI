@@ -53,25 +53,26 @@ const DEFAULT_CATEGORY_TREE: Array<{
   name: string;
   kind: "income" | "expense" | "transfer";
   children?: string[];
+  icon?: string;
 }> = [
   { name: "Income", kind: "income", children: ["Salary", "Bonus", "Refund", "Interest", "Other income"] },
-  { name: "Housing", kind: "expense", children: ["Rent", "Mortgage", "Maintenance", "Furniture"] },
+  { name: "Housing", kind: "expense", children: ["Rent", "Mortgage", "Maintenance", "Furniture"], icon: "/icons/categories/housing.png" },
   { name: "Utilities", kind: "expense", children: ["Electricity", "Water", "Internet", "Phone"] },
-  { name: "Groceries", kind: "expense", children: ["Supermarket", "Convenience store", "Specialty food"] },
-  { name: "Dining", kind: "expense", children: ["Restaurant", "Cafe", "Delivery", "Takeout"] },
-  { name: "Transportation", kind: "expense", children: ["Flight", "Gas", "Bus", "Train", "Taxi", "Parking", "Tolls"] },
-  { name: "Shopping", kind: "expense", children: ["Clothing", "Electronics", "Home goods", "Gifts"] },
+  { name: "Groceries", kind: "expense", children: ["Supermarket", "Convenience store", "Specialty food"], icon: "/icons/categories/groceries.png" },
+  { name: "Dining", kind: "expense", children: ["Restaurant", "Cafe", "Delivery", "Takeout"], icon: "/icons/categories/dining.png" },
+  { name: "Transportation", kind: "expense", children: ["Flight", "Gas", "Bus", "Train", "Taxi", "Parking", "Tolls"], icon: "/icons/categories/transportation.png" },
+  { name: "Shopping", kind: "expense", children: ["Clothing", "Electronics", "Home goods", "Gifts"], icon: "/icons/categories/shopping.png" },
   { name: "Health", kind: "expense", children: ["Pharmacy", "Doctor", "Dental", "Fitness"] },
-  { name: "Entertainment", kind: "expense", children: ["Movies", "Music", "Games", "Events"] },
+  { name: "Entertainment", kind: "expense", children: ["Movies", "Music", "Games", "Events"], icon: "/icons/categories/other.png" },
   { name: "Bills & loans", kind: "expense", children: ["Insurance", "Loan payment", "Credit card", "Subscriptions"] },
   { name: "Transfers", kind: "transfer", children: ["Savings transfer", "Credit card payment", "Internal transfer"] },
-  { name: "Other", kind: "expense", children: ["Miscellaneous"] },
+  { name: "Other", kind: "expense", children: ["Miscellaneous"], icon: "/icons/categories/other.png" },
 ];
 
 export async function ensureCategorySeed(db: PrismaClient, userId: string): Promise<void> {
   const existing = await db.category.findMany({
     where: { userId },
-    select: { id: true, slug: true, name: true, parentId: true },
+    select: { id: true, slug: true, name: true, parentId: true, icon: true },
   });
   const bySlug = new Map(existing.map((category) => [category.slug, category]));
 
@@ -86,11 +87,17 @@ export async function ensureCategorySeed(db: PrismaClient, userId: string): Prom
           name: group.name,
           slug: parentSlug,
           kind: group.kind,
+          icon: group.icon ?? "/icons/categories/other.png",
           sortOrder: sortOrder++,
         },
-        select: { id: true, slug: true, name: true, parentId: true },
+        select: { id: true, slug: true, name: true, parentId: true, icon: true },
       });
       bySlug.set(parent.slug, parent);
+    } else if (!parent.icon) {
+      await db.category.update({
+        where: { id: parent.id },
+        data: { icon: group.icon ?? "/icons/categories/other.png" },
+      });
     }
 
     for (const childName of group.children ?? []) {
@@ -102,10 +109,11 @@ export async function ensureCategorySeed(db: PrismaClient, userId: string): Prom
           name: childName,
           slug: childSlug,
           kind: group.kind,
+          icon: group.icon ?? "/icons/categories/other.png",
           parentId: parent.id,
           sortOrder: sortOrder++,
         },
-        select: { id: true, slug: true, name: true, parentId: true },
+        select: { id: true, slug: true, name: true, parentId: true, icon: true },
       });
       bySlug.set(child.slug, child);
     }

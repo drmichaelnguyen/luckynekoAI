@@ -1,6 +1,6 @@
 "use client";
 
-import { BarChart2, Download, FileInput, Loader2, PanelRightClose, RefreshCw, Shield, Upload, User, Wallet, Wrench } from "lucide-react";
+import { BarChart2, Download, FileInput, Loader2, PanelRightClose, RefreshCw, Shield, Upload, User, Wallet, Wrench, Tags } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 
@@ -22,6 +22,7 @@ import { parseCadenceInput, type RecurrentCadence } from "@/lib/finance/cadence"
 import { DashboardInsights } from "@/components/chat/dashboard-insights";
 import { ToolsPlansTab } from "@/components/chat/tools-plans-tab";
 import { ToolsProfileTab } from "@/components/chat/tools-profile-tab";
+import { ToolsCategoriesTab } from "@/components/chat/tools-categories-tab";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -35,6 +36,7 @@ export type AdvancedToolsTabId =
   | "wallets"
   | "plans"
   | "profile"
+  | "categories"
   | "backup";
 
 type Tab = AdvancedToolsTabId;
@@ -104,6 +106,7 @@ export function AdvancedToolsPanel({
       confirmReason: string | null;
       walletName: string;
       categoryName: string;
+      categoryIcon: string | null;
     }>
   >([]);
   const [walletName, setWalletName] = useState("");
@@ -176,7 +179,7 @@ export function AdvancedToolsPanel({
               Advanced tools
             </h2>
             <p className="text-xs text-muted-foreground">
-              Dashboard · import · confirm · recurring · wallets · plans · profile · backup
+              Dashboard · import · confirm · recurring · wallets · categories · plans · profile · backup
             </p>
           </div>
           <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close">
@@ -193,6 +196,7 @@ export function AdvancedToolsPanel({
               ["confirm",   "Confirm",   RefreshCw],
               ["recurring", "Recurring", RefreshCw],
               ["wallets",   "Wallets",   Wallet],
+              ["categories","Categories",Tags],
               ["plans",     "Plans",     Shield],
               ["profile",   "Profile",   User],
               ["backup",    "Backup",    Download],
@@ -378,6 +382,8 @@ export function AdvancedToolsPanel({
             </div>
           ) : null}
 
+          {tab === "categories" ? <ToolsCategoriesTab active={tab === "categories"} onChanged={refresh} /> : null}
+
           {tab === "plans" ? <ToolsPlansTab active={tab === "plans"} onChanged={refresh} /> : null}
 
           {tab === "profile" ? <ToolsProfileTab active={tab === "profile"} /> : null}
@@ -558,6 +564,7 @@ type PendingRow = {
   confirmReason: string | null;
   walletName: string;
   categoryName: string;
+  categoryIcon: string | null;
 };
 
 const CADENCE_CHOICES: { value: RecurrentCadence | "custom"; label: string }[] = [
@@ -635,12 +642,22 @@ function PendingConfirmRow({
 
   return (
     <li className="rounded-xl border bg-card p-3 text-xs shadow-sm">
-      <div className="font-medium text-foreground">
-        {formatMoney(item.amountCents, item.currency)}{" "}
-        {item.direction === "out" ? "out" : "in"} · {item.walletName}
-      </div>
-      <div className="mt-1 text-muted-foreground">
-        {(item.merchant || item.memo || "No description") + ` · ${item.categoryName}`}
+      <div className="flex items-start gap-3">
+        {item.categoryIcon ? (
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted mt-0.5">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={item.categoryIcon} alt={item.categoryName} className="h-full w-full object-cover" />
+          </div>
+        ) : null}
+        <div className="flex-1">
+          <div className="font-medium text-foreground">
+            {formatMoney(item.amountCents, item.currency)}{" "}
+            {item.direction === "out" ? "out" : "in"} · {item.walletName}
+          </div>
+          <div className="mt-1 text-muted-foreground">
+            {(item.merchant || item.memo || "No description") + ` · ${item.categoryName}`}
+          </div>
+        </div>
       </div>
       {item.confirmReason ? (
         <div className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-[11px] text-amber-950 dark:bg-amber-950/40 dark:text-amber-100">

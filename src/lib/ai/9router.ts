@@ -125,3 +125,45 @@ export async function call9RouterChatCompletion(input: {
     },
   };
 }
+
+export async function call9RouterImageGeneration(input: {
+  prompt: string;
+  model?: string;
+  url?: string;
+}): Promise<string> {
+  const config = get9RouterConfig();
+  if (!config) {
+    throw new Error("Server is missing NINE_ROUTER_API_KEY.");
+  }
+  
+  const baseUrl = config.url.split("/v1/")[0];
+  const requestUrl = input.url?.trim() || `${baseUrl}/v1/images/generations`;
+  
+  const response = await fetch(requestUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: input.model?.trim() || "image-creation",
+      prompt: input.prompt,
+      n: 1,
+      size: "1024x1024",
+      response_format: "b64_json"
+    }),
+  });
+
+  const body = await response.json().catch(() => null) as { data?: Array<{ b64_json?: string; url?: string }>; error?: { message?: string } } | null;
+  if (!response.ok) {
+    throw new Error(body?.error?.message || `9router image request failed with HTTP ${response.status}.`);
+  }
+  
+  const b64 = body?.data?.[0]?.b64_json;
+  const url = body?.data?.[0]?.url;
+  
+  if (b64) return `data:image/png;base64,${b64}`;
+  if (url) return url;
+  
+  throw new Error("9router image generation returned an empty response.");
+}

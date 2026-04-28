@@ -34,29 +34,25 @@ export function chooseStructuredTextPrimary(input: { nineRouterAvailable: boolea
   return input.nineRouterAvailable ? "9router" : "gemini";
 }
 
-export function chooseChatRouterModel(input: {
+export function chooseChatRouterModels(input: {
   hasAttachments: boolean;
   message: string;
   hasConversationContext: boolean;
   nineRouterAvailable: boolean;
   miniModel?: string;
   largeModel?: string;
-}): AiRouterModel {
+}): AiRouterModel[] {
   const miniModel = input.miniModel?.trim() || DEFAULT_9ROUTER_MODEL;
   const largeModel = input.largeModel?.trim() || LARGE_9ROUTER_MODEL;
 
-  if (!input.nineRouterAvailable) return miniModel;
-  if (input.hasAttachments) return miniModel;
+  if (!input.nineRouterAvailable) return [miniModel];
 
-  const text = input.message.toLowerCase();
-  const needsReasoning =
-    input.hasConversationContext ||
-    input.message.length > 700 ||
-    /\b(afford|budget|plan|planning|should i|can i|risk|compare|analy[sz]e|advice|recommend|month end|cash flow|why)\b/.test(
-      text,
-    );
-
-  return needsReasoning ? largeModel : miniModel;
+  // We always want to try the mini model first. If it fails or is confused,
+  // we will fallback to the large model.
+  if (miniModel === largeModel) {
+    return [miniModel];
+  }
+  return [miniModel, largeModel];
 }
 
 export function chooseStructuredTextRouterModel(input?: { miniModel?: string }): AiRouterModel {

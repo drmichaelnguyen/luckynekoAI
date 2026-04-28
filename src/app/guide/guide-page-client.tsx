@@ -17,6 +17,7 @@ import {
   User,
   Wallet,
 } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { useState } from "react";
@@ -165,6 +166,14 @@ const STEPS: Step[] = [
     content: (
       <div className="space-y-3 text-sm text-foreground/90">
         <p>NekoZeni is a Progressive Web App — install it from your browser for a full native-app experience:</p>
+        <div className="relative aspect-square w-full max-w-[240px] mx-auto overflow-hidden rounded-xl border bg-white shadow-sm my-4">
+          <Image
+            src="/images/guide/pwa_install_instruction.png"
+            alt="Illustration showing Add to Home Screen button in a mobile browser"
+            fill
+            className="object-cover"
+          />
+        </div>
         <ul className="space-y-2">
           <Check><strong>iPhone/iPad (Safari):</strong> tap Share &rarr; &ldquo;Add to Home Screen&rdquo; &rarr; Add</Check>
           <Check><strong>Android (Chrome):</strong> menu (&#8942;) &rarr; &ldquo;Install app&rdquo; or &ldquo;Add to Home Screen&rdquo;</Check>
@@ -183,6 +192,14 @@ const STEPS: Step[] = [
     content: (
       <div className="space-y-3 text-sm text-foreground/90">
         <p>After installing NekoZeni as a PWA, you can share receipts directly from your camera roll:</p>
+        <div className="relative aspect-square w-full max-w-[240px] mx-auto overflow-hidden rounded-xl border bg-white shadow-sm my-4">
+          <Image
+            src="/images/guide/share_sheet_instruction.png"
+            alt="Illustration showing native share sheet with NekoZeni app icon"
+            fill
+            className="object-cover"
+          />
+        </div>
         <ul className="space-y-2">
           <Check><strong>iPhone:</strong> Photos → select receipt → Share → find NekoZeni (swipe and tap More if needed)</Check>
           <Check><strong>Android:</strong> Gallery → select image → Share → find NekoZeni</Check>

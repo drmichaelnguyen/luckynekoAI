@@ -180,6 +180,7 @@ model Category {
   user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   name      String
   slug      String
+  icon      String?
   kind      CategoryKind @default(expense)
   parentId  String?
   parent    Category?    @relation("CategoryChildren", fields: [parentId], references: [id], onDelete: SetNull)

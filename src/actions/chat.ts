@@ -9,7 +9,7 @@ import { auth } from "@/auth";
 import { call9RouterChatCompletion, has9RouterConfig } from "@/lib/ai/9router";
 import {
   chooseChatPrimary,
-  chooseChatRouterModel,
+  chooseChatRouterModels,
   orderedProviders,
   parseModelJson,
 } from "@/lib/ai/model-router";
@@ -114,6 +114,7 @@ const GeminiResponseSchema = z
       })
       .nullable()
       .optional(),
+    requiresComplexReasoning: z.boolean().optional(),
   })
   .passthrough();
 
@@ -166,10 +167,12 @@ Your JSON MUST match this shape (optional keys only when relevant):
   "receiptSplit": null | [{ "description": string, "category": string, "amount": number, "currency": string, "direction": "in"|"out" }],
   "planSuggestion": null | { "title": string, "description": string | null, "amountCents": number | null, "currency": string, "period": "none" | "monthly" | "yearly" },
   "pendingRecurrenceUpdate": null | { "merchantHint": string | null, "cadenceText": string, "nextReminderAt": string | null },
-  "ledgerEdit": null | { "merchantHint": string | null, "dateHint": string | null, "newAmount": number | null, "newMemo": string | null, "newCategory": string | null }
+  "ledgerEdit": null | { "merchantHint": string | null, "dateHint": string | null, "newAmount": number | null, "newMemo": string | null, "newCategory": string | null },
+  "requiresComplexReasoning": boolean
 }
 
 Rules:
+- If the user asks for complex financial planning, risk analysis, or deep reasoning that you cannot confidently satisfy, set requiresComplexReasoning to true.
 - The user message may include USER PREFERENCES (how to address them in chat) and FINANCIAL PLANS (spending budgets and savings goals). Follow those when giving advice; do not ignore a stated monthly cap or savings target without asking first.
 - Choose exactly one primary extraction target: populate ONLY ONE of transaction/transactionList/receipt/paystub/ledgerEdit; set the others to null.
 - If the user explicitly asks to edit, update, or add a comment/note to a PAST or EXISTING transaction (e.g., "add a note to my Uber ride", "change the amount of my Tim Hortons to $5"), use documentKind "ledger_edit" and populate ledgerEdit with merchantHint, dateHint (if given), newAmount, newMemo, newCategory.
@@ -592,7 +595,7 @@ export async function handleChatInput(formData: FormData) {
       geminiAvailable: Boolean(model),
       nineRouterAvailable: has9RouterConfig(),
     });
-    const routerModel = chooseChatRouterModel({
+    const routerModels = chooseChatRouterModels({
       hasAttachments: preparedAttachments.length > 0,
       message,
       hasConversationContext: Boolean(packedFinancialSummary || recentPriorTurns.length > 0),
@@ -601,12 +604,24 @@ export async function handleChatInput(formData: FormData) {
       largeModel: adminSettings.routing.nineRouterModel,
     });
 
+    const executionPlan: { provider: string; modelName: string }[] = [];
     for (const provider of providerOrder) {
+      if (provider === "gemini") {
+        executionPlan.push({ provider, modelName });
+      } else {
+        for (const rm of routerModels) {
+          executionPlan.push({ provider, modelName: rm });
+        }
+      }
+    }
+
+    for (const target of executionPlan) {
       const startedAt = Date.now();
       try {
-        const selectedModel = provider === "gemini" ? modelName : routerModel;
+        const selectedModel = target.modelName;
+        const provider = target.provider;
         let text = "";
-        let usage: AiUsageMetrics;
+        let usage: AiUsageMetrics | undefined;
         if (provider === "gemini") {
           const rawText = await model!.generateContent(parts);
           text = rawText.response.text();
@@ -617,31 +632,51 @@ export async function handleChatInput(formData: FormData) {
             userPrompt: prompt,
             temperature: 0.15,
             attachments: preparedAttachments,
-            model: routerModel,
+            model: selectedModel,
             url: adminSettings.routing.nineRouterUrl,
           });
           text = rawText.text;
           usage = rawText.usage;
         }
         parsed = GeminiResponseSchema.safeParse(parseModelJson(text));
+        
+        let errorMessage = parsed.success ? null : "Model returned invalid JSON for chat response.";
+        let success = parsed.success;
+        
+        if (success && parsed.data) {
+          if (parsed.data.requiresComplexReasoning) {
+            success = false;
+            errorMessage = "Model flagged requiresComplexReasoning, triggering fallback.";
+          } else if (preparedAttachments.length > 0 && parsed.data.documentKind === "unknown_document") {
+            success = false;
+            errorMessage = "Model returned unknown_document for an attachment, triggering fallback.";
+          }
+        }
+
         await recordAiRequestLog({
           userId,
           feature: "chat_response",
           provider,
           model: selectedModel,
-          success: parsed.success,
-          usage,
+          success,
+          usage: usage || { promptTokens: null, completionTokens: null, totalTokens: null },
           latencyMs: Date.now() - startedAt,
-          errorMessage: parsed.success ? null : "Model returned invalid JSON for chat response.",
+          errorMessage,
         });
-        if (parsed.success) break;
+
+        if (success) {
+          break;
+        } else {
+          lastModelError = new Error(errorMessage || "Unknown fallback trigger");
+          parsed = null; // Clear to continue fallback
+        }
       } catch (e) {
         lastModelError = e;
         await recordAiRequestLog({
           userId,
           feature: "chat_response",
-          provider,
-          model: provider === "gemini" ? modelName : routerModel,
+          provider: target.provider,
+          model: target.modelName,
           success: false,
           latencyMs: Date.now() - startedAt,
           errorMessage: e instanceof Error ? e.message : "Unknown model error.",
