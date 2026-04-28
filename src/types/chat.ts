@@ -49,6 +49,9 @@ export type PendingDocumentImport = {
 export type PendingLedgerEdit = {
   merchantHint: string | null;
   dateHint: string | null;
+  walletHint?: string | null;
+  categoryHint?: string | null;
+  memoHint?: string | null;
   newAmount: number | null;
   newMemo: string | null;
   newCategory: string | null;

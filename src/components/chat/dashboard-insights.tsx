@@ -509,6 +509,35 @@ function DashboardAiAssistant({ dashboardData }: { dashboardData: Extract<Ledger
   const [input, setInput] = useState("");
   const [isChatting, startChat] = useTransition();
   const chatRef = useRef<HTMLDivElement>(null);
+  const storageKey = "nekozeni:analytics-chat";
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (!raw) {
+        setChatHistory([]);
+        return;
+      }
+      const parsed = JSON.parse(raw) as DashboardChatHistory;
+      if (Array.isArray(parsed)) {
+        setChatHistory(
+          parsed
+            .filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
+            .slice(-30),
+        );
+      }
+    } catch {
+      setChatHistory([]);
+    }
+  }, [storageKey]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify(chatHistory.slice(-30)));
+    } catch {
+      // Ignore storage failures; chat still works for the current page session.
+    }
+  }, [chatHistory, storageKey]);
 
   useEffect(() => {
     if (chatRef.current) {
@@ -525,7 +554,7 @@ function DashboardAiAssistant({ dashboardData }: { dashboardData: Extract<Ledger
     setChatHistory(newHistory);
 
     startChat(async () => {
-      const res = await dashboardMiniChatAction(msg, chatHistory, dashboardData);
+      const res = await dashboardMiniChatAction(msg, newHistory.slice(0, -1), dashboardData);
       if (res.ok) {
         setChatHistory((prev) => [...prev, { role: "assistant", content: res.response }]);
       } else {

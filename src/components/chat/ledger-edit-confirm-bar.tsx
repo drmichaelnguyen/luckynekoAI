@@ -33,6 +33,9 @@ export function LedgerEditConfirmBar({ pending, onResolved, onDismiss }: Props) 
       const r = await confirmLedgerEditAction({
         merchantHint: pending.merchantHint,
         dateHint: pending.dateHint,
+        walletHint: pending.walletHint ?? null,
+        categoryHint: pending.categoryHint ?? null,
+        memoHint: pending.memoHint ?? null,
         newAmount: pending.newAmount,
         newMemo: pending.newMemo,
         newCategory: pending.newCategory,

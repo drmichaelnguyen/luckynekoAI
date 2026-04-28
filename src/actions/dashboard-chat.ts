@@ -20,7 +20,15 @@ type ParsedSpendQuery = {
   timeRange: { from: Date; to: Date; label: string } | null;
   categoryIds: string[];
   categoryLabel: string | null;
+  walletIds: string[];
+  walletLabel: string | null;
   searchTerms: string[];
+  direction: "out" | "in";
+};
+
+type WalletRow = {
+  id: string;
+  name: string;
 };
 
 function normalizeQueryText(value: string): string {
@@ -215,6 +223,20 @@ function extractSearchTerms(message: string): string[] {
     "week",
     "today",
     "yesterday",
+    "bao",
+    "nhieu",
+    "da",
+    "tieu",
+    "chi",
+    "phi",
+    "thu",
+    "nhap",
+    "trong",
+    "vi",
+    "cua",
+    "cho",
+    "nam",
+    "thang",
   ]);
 
   return normalized
@@ -223,21 +245,72 @@ function extractSearchTerms(message: string): string[] {
     .filter((token, index, arr) => arr.indexOf(token) === index);
 }
 
-function parseSpendQuery(message: string, categories: CategoryRow[]): ParsedSpendQuery | null {
+function selectWalletScope(wallets: WalletRow[], message: string): { walletIds: string[]; walletLabel: string | null } {
+  const normalized = normalizeQueryText(message);
+  if (!normalized) return { walletIds: [], walletLabel: null };
+
+  let best: WalletRow | null = null;
+  let bestScore = 0;
+  for (const wallet of wallets) {
+    const walletNorm = normalizeQueryText(wallet.name);
+    if (!walletNorm) continue;
+    let score = 0;
+    if (normalized === walletNorm) score = 100;
+    else if (
+      normalized.includes(` ${walletNorm} `) ||
+      normalized.startsWith(`${walletNorm} `) ||
+      normalized.endsWith(` ${walletNorm}`) ||
+      normalized.includes(walletNorm)
+    ) {
+      score = 90 + Math.min(walletNorm.split(" ").length * 2, 10);
+    } else {
+      const tokens = normalized.split(" ").filter(Boolean);
+      const matchedTokens = walletNorm.split(" ").filter((t) => tokens.includes(t)).length;
+      if (matchedTokens > 0) score = matchedTokens * 12;
+    }
+    if (score > bestScore) {
+      best = wallet;
+      bestScore = score;
+    }
+  }
+
+  if (!best || bestScore < 12) return { walletIds: [], walletLabel: null };
+  return { walletIds: [best.id], walletLabel: best.name };
+}
+
+function removeScopeTerms(searchTerms: string[], scopes: Array<string | null>): string[] {
+  const scopeTokens = new Set(
+    scopes
+      .flatMap((scope) => normalizeQueryText(scope ?? "").split(" "))
+      .filter((token) => token.length >= 3),
+  );
+  return searchTerms.filter((term) => !scopeTokens.has(term));
+}
+
+function parseDirection(message: string): "out" | "in" {
+  const normalized = normalizeQueryText(message);
+  if (/\b(income|earned|earnings|revenue|deposit|inflow|thu nhap|tien vao|doanh thu)\b/.test(normalized)) return "in";
+  return "out";
+}
+
+function parseSpendQuery(message: string, categories: CategoryRow[], wallets: WalletRow[]): ParsedSpendQuery | null {
   const timeRange = parseTimeRange(message);
   const { categoryIds, categoryLabel } = selectCategoryScope(categories, message);
-  const searchTerms = extractSearchTerms(message);
+  const { walletIds, walletLabel } = selectWalletScope(wallets, message);
+  const direction = parseDirection(message);
+  const searchTerms = removeScopeTerms(extractSearchTerms(message), [categoryLabel, walletLabel]);
 
   const normalized = normalizeQueryText(message);
   const spendIntent =
-    /\b(spend|spent|spending|expense|expenses|total|how much)\b/.test(normalized) ||
+    /\b(spend|spent|spending|expense|expenses|total|how much|income|earned|earnings|revenue|bao nhieu|tieu|chi phi|thu nhap|doanh thu)\b/.test(normalized) ||
     timeRange !== null ||
-    categoryIds.length > 0;
+    categoryIds.length > 0 ||
+    walletIds.length > 0;
 
   if (!spendIntent) return null;
-  if (!timeRange && categoryIds.length === 0 && searchTerms.length === 0) return null;
+  if (!timeRange && categoryIds.length === 0 && walletIds.length === 0 && searchTerms.length === 0) return null;
 
-  return { timeRange, categoryIds, categoryLabel, searchTerms };
+  return { timeRange, categoryIds, categoryLabel, walletIds, walletLabel, searchTerms, direction };
 }
 
 function formatTransactionLine(tx: {
@@ -260,117 +333,155 @@ export async function dashboardMiniChatAction(
   history: DashboardChatHistory,
   dashboardData: any
 ): Promise<{ ok: true; response: string } | { ok: false; error: string }> {
-  const session = await auth();
-  if (!session?.user?.id) return { ok: false, error: "Unauthorized" };
+  try {
+    const session = await auth();
+    if (!session?.user?.id) return { ok: false, error: "Unauthorized" };
 
-  const user = await prisma.user.findUnique({
-    where: { id: session.user.id },
-    select: { preferredCurrency: true },
-  });
-  const displayCurrency = (user?.preferredCurrency ?? dashboardData?.displayCurrency ?? "CAD").toUpperCase().slice(0, 3);
-  const categories = await prisma.category.findMany({
-    where: { userId: session.user.id },
-    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-    select: {
-      id: true,
-      name: true,
-      slug: true,
-      parentId: true,
-      parent: { select: { id: true, name: true, slug: true } },
-    },
-  });
+    const user = await prisma.user.findUnique({
+      where: { id: session.user.id },
+      select: { preferredCurrency: true },
+    });
+    const displayCurrency = (user?.preferredCurrency ?? dashboardData?.displayCurrency ?? "CAD").toUpperCase().slice(0, 3);
+    const categories = await prisma.category.findMany({
+      where: { userId: session.user.id },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        parentId: true,
+        parent: { select: { id: true, name: true, slug: true } },
+      },
+    });
+    const wallets = await prisma.wallet.findMany({
+      where: { userId: session.user.id },
+      orderBy: [{ isDefault: "desc" }, { sortOrder: "asc" }, { name: "asc" }],
+      select: { id: true, name: true },
+    });
 
-  const spendQuery = parseSpendQuery(message, categories);
-  if (spendQuery) {
-    const where: Prisma.TransactionWhereInput = {
+    const spendQuery = parseSpendQuery(message, categories, wallets);
+    if (spendQuery) {
+      const where: Prisma.TransactionWhereInput = {
+        userId: session.user.id,
+        status: { not: "rejected" },
+        direction: spendQuery.direction,
+        currency: displayCurrency,
+      };
+
+      if (spendQuery.timeRange) {
+        where.occurredAt = { gte: spendQuery.timeRange.from, lt: spendQuery.timeRange.to };
+      }
+      if (spendQuery.walletIds.length > 0) {
+        where.walletId = { in: spendQuery.walletIds };
+      }
+
+      const textClauses =
+        spendQuery.searchTerms.length > 0
+          ? spendQuery.searchTerms.map((term) => ({
+              OR: [{ merchant: { contains: term } }, { memo: { contains: term } }],
+            }))
+          : [];
+
+      if (spendQuery.categoryIds.length > 0) {
+        where.categoryId = { in: spendQuery.categoryIds };
+      }
+      if (textClauses.length > 0) {
+        where.AND = textClauses;
+      }
+
+      const [transactions, totalCents, txCount] = await Promise.all([
+        prisma.transaction.findMany({
+          where,
+          orderBy: [{ occurredAt: "desc" }],
+          take: 200,
+          include: { wallet: true, category: { include: { parent: true } } },
+        }),
+        prisma.transaction.aggregate({
+          where,
+          _sum: { amountCents: true },
+        }),
+        prisma.transaction.count({ where }),
+      ]);
+
+      const spentCents = totalCents._sum.amountCents ?? 0;
+      const scopeParts: string[] = [];
+      if (spendQuery.walletLabel) scopeParts.push(spendQuery.walletLabel);
+      if (spendQuery.categoryLabel) scopeParts.push(spendQuery.categoryLabel);
+      if (spendQuery.searchTerms.length > 0) scopeParts.push(spendQuery.searchTerms.join(" "));
+      if (spendQuery.timeRange) scopeParts.push(spendQuery.timeRange.label);
+      const scope = scopeParts.length > 0 ? scopeParts.join(" · ") : "matching transactions";
+      const sampleLines = transactions.slice(0, 8).map((tx) =>
+        formatTransactionLine({
+          occurredAt: tx.occurredAt,
+          amountCents: tx.amountCents,
+          merchant: tx.merchant,
+          memo: tx.memo,
+          categoryName: tx.category?.parent?.name
+            ? `${tx.category.parent.name} > ${tx.category.name}`
+            : tx.category?.name ?? "Uncategorized",
+          walletName: tx.wallet.name,
+          currency: tx.currency,
+        }),
+      );
+
+      let response =
+        spendQuery.direction === "in"
+          ? `You received ${money(spentCents, displayCurrency)} from ${scope}.`
+          : `You spent ${money(spentCents, displayCurrency)} on ${scope}.`;
+      response += ` I found ${txCount} matching transaction${txCount === 1 ? "" : "s"}.`;
+      if (sampleLines.length > 0) {
+        response += ` Recent matches: ${sampleLines.join(" | ")}`;
+        if (txCount > sampleLines.length) {
+          response += ` | ...and ${txCount - sampleLines.length} more.`;
+        }
+      }
+      return { ok: true, response };
+    }
+
+    if (!has9RouterConfig()) {
+      return { ok: false, error: "AI routing is not configured." };
+    }
+
+    const dashboardFrom = typeof dashboardData?.fromIso === "string" ? new Date(dashboardData.fromIso) : null;
+    const recentWhere: Prisma.TransactionWhereInput = {
       userId: session.user.id,
       status: { not: "rejected" },
-      direction: "out",
       currency: displayCurrency,
+      ...(dashboardFrom && !Number.isNaN(dashboardFrom.getTime()) ? { occurredAt: { gte: dashboardFrom } } : {}),
     };
+    const recentTransactions = await prisma.transaction.findMany({
+      where: recentWhere,
+      orderBy: { occurredAt: "desc" },
+      take: 60,
+      include: { wallet: true, category: { include: { parent: true } } },
+    });
 
-    if (spendQuery.timeRange) {
-      where.occurredAt = { gte: spendQuery.timeRange.from, lt: spendQuery.timeRange.to };
-    }
-
-    const textClauses =
-      spendQuery.searchTerms.length > 0
-        ? spendQuery.searchTerms.flatMap((term) => [
-            { merchant: { contains: term, mode: "insensitive" as const } },
-            { memo: { contains: term, mode: "insensitive" as const } },
-          ])
-        : [];
-
-    if (spendQuery.categoryIds.length > 0 && textClauses.length > 0) {
-      where.OR = [{ categoryId: { in: spendQuery.categoryIds } }, ...textClauses];
-    } else if (spendQuery.categoryIds.length > 0) {
-      where.categoryId = { in: spendQuery.categoryIds };
-    } else if (textClauses.length > 0) {
-      where.OR = textClauses;
-    }
-
-    const [transactions, totalCents, txCount] = await Promise.all([
-      prisma.transaction.findMany({
-        where,
-        orderBy: [{ occurredAt: "desc" }],
-        take: 200,
-        include: { wallet: true, category: { include: { parent: true } } },
-      }),
-      prisma.transaction.aggregate({
-        where,
-        _sum: { amountCents: true },
-      }),
-      prisma.transaction.count({ where }),
-    ]);
-
-    const spentCents = totalCents._sum.amountCents ?? 0;
-    const scopeParts: string[] = [];
-    if (spendQuery.categoryLabel) scopeParts.push(spendQuery.categoryLabel);
-    if (spendQuery.timeRange) scopeParts.push(spendQuery.timeRange.label);
-    const scope = scopeParts.length > 0 ? scopeParts.join(" · ") : "matching transactions";
-    const sampleLines = transactions.slice(0, 8).map((tx) =>
-      formatTransactionLine({
-        occurredAt: tx.occurredAt,
+    // Sanitize the dashboard data (bounded summaries + recent rows only)
+    const context = {
+      range: dashboardData.rangeLabel,
+      currency: dashboardData.displayCurrency,
+      totals: dashboardData.totals,
+      topMerchants: dashboardData.topMerchants,
+      byWallet: dashboardData.byWallet,
+      byCategory: dashboardData.byCategory.map((c: any) => ({
+        name: c.name,
+        expenseCents: c.expenseCents,
+        incomeCents: c.incomeCents,
+      })),
+      recentTransactions: recentTransactions.map((tx) => ({
+        date: tx.occurredAt.toISOString().slice(0, 10),
+        direction: tx.direction,
         amountCents: tx.amountCents,
         merchant: tx.merchant,
         memo: tx.memo,
-        categoryName: tx.category?.parent?.name
+        wallet: tx.wallet.name,
+        category: tx.category?.parent?.name
           ? `${tx.category.parent.name} > ${tx.category.name}`
           : tx.category?.name ?? "Uncategorized",
-        walletName: tx.wallet.name,
-        currency: tx.currency,
-      }),
-    );
+      })),
+    };
 
-    let response = `You spent ${money(spentCents, displayCurrency)} on ${scope}.`;
-    response += ` I found ${txCount} matching transaction${txCount === 1 ? "" : "s"}.`;
-    if (sampleLines.length > 0) {
-      response += ` Recent matches: ${sampleLines.join(" | ")}`;
-      if (txCount > sampleLines.length) {
-        response += ` | ...and ${txCount - sampleLines.length} more.`;
-      }
-    }
-    return { ok: true, response };
-  }
-
-  if (!has9RouterConfig()) {
-    return { ok: false, error: "AI routing is not configured." };
-  }
-
-  // Sanitize the dashboard data (do not send huge lists, just summaries)
-  const context = {
-    range: dashboardData.rangeLabel,
-    currency: dashboardData.displayCurrency,
-    totals: dashboardData.totals,
-    topMerchants: dashboardData.topMerchants,
-    byCategory: dashboardData.byCategory.map((c: any) => ({
-      name: c.name,
-      expenseCents: c.expenseCents,
-      incomeCents: c.incomeCents,
-    })),
-  };
-
-  const systemInstruction = `You are a helpful AI financial analyst assisting a user with their NekoZeni dashboard.
+    const systemInstruction = `You are a helpful AI financial analyst assisting a user with their NekoZeni dashboard.
 You are given the user's aggregated financial data for a specific time range.
 Use this data to answer their questions accurately and concisely.
 
@@ -380,39 +491,49 @@ ${JSON.stringify(context, null, 2)}
 Rules:
 - Keep answers short and friendly.
 - Format currency amounts properly (e.g. $5.00 instead of 500 cents). Note that all amounts in the context are in CENTS (1/100 of the currency unit). You must divide by 100.
-- If the user asks about something not in the data context, let them know you don't have that specific data in this view.
+- If the user asks about something not in the data context, say exactly what is missing instead of guessing.
+- Use recentTransactions for concrete examples, but say when the answer is based only on the current dashboard range and the 60 most recent rows.
+- Respect wallet names and category names exactly. Do not confuse a wallet with a category or merchant.
+- Reply in the same language as the user's latest message.
 - You can offer short insights like "You spent the most on..." if they ask for a summary.`;
 
-  const conversation = history.length > 0 
-    ? "Previous conversation:\n" + history.map(h => `${h.role === "user" ? "User" : "Assistant"}: ${h.content}`).join("\n") + "\n\n"
-    : "";
+    const conversation = history.length > 0
+      ? "Previous conversation:\n" + history.map(h => `${h.role === "user" ? "User" : "Assistant"}: ${h.content}`).join("\n") + "\n\n"
+      : "";
 
-  const userPrompt = `${conversation}User: ${message}`;
+    const userPrompt = `${conversation}User: ${message}`;
 
-  const modelsToTry = chooseChatRouterModels({
-    hasAttachments: false,
-    message: message,
-    hasConversationContext: history.length > 0,
-    nineRouterAvailable: true,
-  });
+    const modelsToTry = chooseChatRouterModels({
+      hasAttachments: false,
+      message: message,
+      hasConversationContext: history.length > 0,
+      nineRouterAvailable: true,
+    });
 
-  let lastError: Error | null = null;
+    let lastError: Error | null = null;
 
-  for (const model of modelsToTry) {
-    try {
-      const res = await call9RouterChatCompletion({
-        systemInstruction,
-        userPrompt,
-        model,
-        temperature: 0.3,
-      });
+    for (const model of modelsToTry) {
+      try {
+        const res = await call9RouterChatCompletion({
+          systemInstruction,
+          userPrompt,
+          model,
+          temperature: 0.3,
+        });
 
-      return { ok: true, response: res.text };
-    } catch (err: any) {
-      console.warn(`dashboardMiniChatAction error with model ${model}:`, err);
-      lastError = err;
+        return { ok: true, response: res.text };
+      } catch (err: any) {
+        console.warn(`dashboardMiniChatAction error with model ${model}:`, err);
+        lastError = err;
+      }
     }
-  }
 
-  return { ok: false, error: lastError?.message || "AI failed to respond." };
+    return { ok: false, error: lastError?.message || "AI failed to respond." };
+  } catch (err) {
+    console.error("dashboardMiniChatAction failed:", err);
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Analytics chat failed.",
+    };
+  }
 }

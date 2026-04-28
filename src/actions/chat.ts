@@ -110,6 +110,9 @@ const GeminiResponseSchema = z
       .object({
         merchantHint: z.string().nullable().optional(),
         dateHint: z.string().nullable().optional(),
+        walletHint: z.string().nullable().optional(),
+        categoryHint: z.string().nullable().optional(),
+        memoHint: z.string().nullable().optional(),
         newAmount: z.number().nullable().optional(),
         newMemo: z.string().nullable().optional(),
         newCategory: z.string().nullable().optional(),
@@ -122,6 +125,9 @@ const GeminiResponseSchema = z
       .object({
         merchantHint: z.string().nullable().optional(),
         dateHint: z.string().nullable().optional(),
+        walletHint: z.string().nullable().optional(),
+        categoryHint: z.string().nullable().optional(),
+        memoHint: z.string().nullable().optional(),
         newAmount: z.number().nullable().optional(),
         newMemo: z.string().nullable().optional(),
         newCategory: z.string().nullable().optional(),
@@ -184,7 +190,7 @@ Your JSON MUST match this shape (optional keys only when relevant):
   "receiptSplit": null | [{ "description": string, "category": string, "amount": number, "currency": string, "direction": "in"|"out" }],
   "planSuggestion": null | { "title": string, "description": string | null, "amountCents": number | null, "currency": string, "period": "none" | "monthly" | "yearly" },
   "pendingRecurrenceUpdate": null | { "merchantHint": string | null, "cadenceText": string, "nextReminderAt": string | null },
-  "ledgerEdit": null | { "merchantHint": string | null, "dateHint": string | null, "newAmount": number | null, "newMemo": string | null, "newCategory": string | null, "newMerchant": string | null },
+  "ledgerEdit": null | { "merchantHint": string | null, "dateHint": string | null, "walletHint": string | null, "categoryHint": string | null, "memoHint": string | null, "newAmount": number | null, "newMemo": string | null, "newCategory": string | null, "newMerchant": string | null },
   "requiresComplexReasoning": boolean
 }
 
@@ -192,7 +198,7 @@ Rules:
 - If the user asks for complex financial planning, risk analysis, or deep reasoning that you cannot confidently satisfy, set requiresComplexReasoning to true.
 - The user message may include USER PREFERENCES (how to address them in chat) and FINANCIAL PLANS (spending budgets and savings goals). Follow those when giving advice; do not ignore a stated monthly cap or savings target without asking first.
 - Choose exactly one primary extraction target: populate ONLY ONE of transaction/transactionList/receipt/paystub/ledgerEdit; set the others to null.
-- If the user explicitly asks to edit, update, change category, change merchant, or add a comment/note to a PAST or EXISTING transaction (e.g., "add a note to my Uber ride", "change the amount of my Tim Hortons to $5", "this should be in tax category", "change merchant to CRA"), use documentKind "ledger_edit" and populate ledgerEdit with merchantHint, dateHint (if given), newAmount, newMemo, newCategory, newMerchant.
+- If the user explicitly asks to edit, update, change category, change merchant, or add a comment/note to a PAST or EXISTING transaction (e.g., "add a note to my Uber ride", "change the amount of my Tim Hortons to $5", "this should be in tax category", "change merchant to CRA"), use documentKind "ledger_edit" and populate ledgerEdit. Use merchantHint/dateHint/walletHint/categoryHint/memoHint to identify EXISTING rows, and use newAmount/newMemo/newCategory/newMerchant for the requested new values. Example: if the user says insurance in Car Rental should be ICBC, use merchantHint "Insurance", walletHint "Car Rental", categoryHint "Insurance", and newMerchant "ICBC".
 - If the user only typed text describing a purchase, use documentKind "freeform_transaction" and populate transaction.
 - If the uploaded file is a clear retail or service purchase receipt or bill (you can read totals and context), use documentKind "receipt" and populate receipt with structured expense data suitable for database insertion.
 - If the uploaded file is a payroll or payslip document from Canada or Vietnam, use documentKind "payroll_document" and populate paystub with payroll fields suitable for database insertion.
@@ -305,19 +311,42 @@ Purchase intent — CRITICAL:
 
 assistantMessage should be a concise, human summary of what you understood (1-3 sentences), not raw JSON.`;
 
-function buildSystemInstruction(locale: Locale): string {
+type ResponseLanguage = "English" | "Vietnamese";
+
+function responseLanguageName(locale: Locale): ResponseLanguage {
+  return locale === "vi" ? "Vietnamese" : "English";
+}
+
+function languageText(responseLanguage: ResponseLanguage, english: string, vietnamese: string): string {
+  return responseLanguage === "Vietnamese" ? vietnamese : english;
+}
+
+function resolveResponseLanguage(locale: Locale, userMessage: string): ResponseLanguage {
+  const detected = detectLanguageFromMessage(userMessage);
+  if (detected === "vi") return "Vietnamese";
+  if (detected === "en") return "English";
+  return responseLanguageName(locale);
+}
+
+function buildSystemInstruction(locale: Locale, responseLanguage: ResponseLanguage): string {
   const localeHint =
     locale === "vi"
       ? [
           "The user selected Vietnamese in the app.",
-          "Reply in Vietnamese by default for assistantMessage and followUpQuestion unless the user explicitly asks for English.",
+          "Vietnamese is the default response language.",
         ].join(" ")
       : [
           "The user selected English in the app.",
-          "Reply in English by default for assistantMessage and followUpQuestion unless the user explicitly asks for Vietnamese.",
+          "English is the default response language.",
         ].join(" ");
 
-  return `${SYSTEM_INSTRUCTION_BASE}\n\nLocale preference:\n- ${localeHint}`;
+  return `${SYSTEM_INSTRUCTION_BASE}
+
+Locale and chat language:
+- ${localeHint}
+- For this specific reply, assistantMessage and followUpQuestion MUST be in ${responseLanguage}.
+- The selected app language is the default when the user message language is unclear or there is only an attachment.
+- If the user clearly switches to another language during chat, follow that current message's language for the reply.`;
 }
 
 const ConversationTurnSchema = z.object({
@@ -337,6 +366,8 @@ function todayIso(): string {
 function buildUserPrompt(input: {
   message: string;
   hasAttachments: boolean;
+  appLocale: Locale;
+  responseLanguage: ResponseLanguage;
   shareContext?: { title?: string; text?: string; url?: string };
   financeContext?: string;
   conversation?: {
@@ -403,6 +434,12 @@ function buildUserPrompt(input: {
   }
 
   lines.push("");
+  lines.push("RESPONSE LANGUAGE OVERRIDE:");
+  lines.push(`- App language setting: ${responseLanguageName(input.appLocale)}.`);
+  lines.push(`- Reply in: ${input.responseLanguage}.`);
+  lines.push("- Apply this to assistantMessage and followUpQuestion.");
+
+  lines.push("");
   lines.push("Return ONLY valid JSON matching the schema described in your system instructions.");
   return lines.join("\n");
 }
@@ -436,9 +473,11 @@ export async function handleChatInput(formData: FormData) {
   const userId = session.user.id;
   const adminSettings = await loadAdminRuntimeSettings();
   const localeCookieStore = await cookies();
-  const locale = parseLocale(localeCookieStore.get(LOCALE_COOKIE)?.value);
+  const cookieLocale = parseLocale(localeCookieStore.get(LOCALE_COOKIE)?.value);
 
   const message = String(formData.get("message") ?? "").trim();
+  const locale = parseLocale(String(formData.get("locale") ?? cookieLocale));
+  const responseLanguage = resolveResponseLanguage(locale, message);
   const shareContextRaw = String(formData.get("shareContext") ?? "").trim();
 
   let shareContext: { title?: string; text?: string; url?: string } | undefined;
@@ -511,7 +550,7 @@ export async function handleChatInput(formData: FormData) {
   const model = apiKey
     ? new GoogleGenerativeAI(apiKey).getGenerativeModel({
         model: modelName,
-        systemInstruction: buildSystemInstruction(locale),
+        systemInstruction: buildSystemInstruction(locale, responseLanguage),
         generationConfig: {
           temperature: 0.15,
           responseMimeType: "application/json",
@@ -522,6 +561,8 @@ export async function handleChatInput(formData: FormData) {
   const prompt = buildUserPrompt({
     message,
     hasAttachments: files.length > 0,
+    appLocale: locale,
+    responseLanguage,
     shareContext,
     financeContext,
     conversation:
@@ -662,7 +703,7 @@ export async function handleChatInput(formData: FormData) {
           usage = usageFromGeminiResult(rawText);
         } else {
           const rawText = await call9RouterChatCompletion({
-            systemInstruction: buildSystemInstruction(locale),
+            systemInstruction: buildSystemInstruction(locale, responseLanguage),
             userPrompt: prompt,
             temperature: 0.15,
             attachments: preparedAttachments,
@@ -736,8 +777,11 @@ export async function handleChatInput(formData: FormData) {
 
     if (hadFileUpload) {
       if (data.documentKind === "unknown_document" && !followUpQuestion) {
-        followUpQuestion =
-          "I’m not sure what this file is. Is it a purchase receipt? Upload a clearer photo or type what you bought and how much.";
+        followUpQuestion = languageText(
+          responseLanguage,
+          "I’m not sure what this file is. Is it a purchase receipt? Upload a clearer photo or type what you bought and how much.",
+          "Mình chưa chắc tệp này là gì. Đây có phải hóa đơn mua hàng không? Bạn hãy tải ảnh rõ hơn hoặc gõ nhanh bạn đã mua gì và hết bao nhiêu.",
+        );
       }
       if (
         data.documentKind === "receipt" &&
@@ -749,12 +793,23 @@ export async function handleChatInput(formData: FormData) {
         const totalBad = r.total == null || r.total === "";
         const merchantBad = r.merchant == null || r.merchant === "";
         if (totalBad && merchantBad && !followUpQuestion) {
-          followUpQuestion =
-            "I couldn’t read the store or total from this receipt — can you tell me the merchant and amount, or send a clearer picture?";
+          followUpQuestion = languageText(
+            responseLanguage,
+            "I couldn’t read the store or total from this receipt — can you tell me the merchant and amount, or send a clearer picture?",
+            "Mình không đọc được tên cửa hàng hoặc tổng tiền trên hóa đơn này — bạn cho mình biết nơi mua và số tiền, hoặc gửi ảnh rõ hơn nhé?",
+          );
         } else if (totalBad && !merchantBad && !followUpQuestion) {
-          followUpQuestion = "What was the total on this receipt?";
+          followUpQuestion = languageText(
+            responseLanguage,
+            "What was the total on this receipt?",
+            "Tổng tiền trên hóa đơn này là bao nhiêu?",
+          );
         } else if (merchantBad && !totalBad && !followUpQuestion) {
-          followUpQuestion = "Which store is this receipt from?";
+          followUpQuestion = languageText(
+            responseLanguage,
+            "Which store is this receipt from?",
+            "Hóa đơn này là của cửa hàng nào?",
+          );
         }
       }
     }
@@ -907,13 +962,26 @@ export async function handleChatInput(formData: FormData) {
     let assistantMessage =
       typeof data.assistantMessage === "string" && data.assistantMessage.trim().length > 0
         ? data.assistantMessage.trim()
-        : "I processed your upload but didn’t get a readable summary back. Try again, or add a short note about what the file is.";
+        : languageText(
+            responseLanguage,
+            "I processed your upload but didn’t get a readable summary back. Try again, or add a short note about what the file is.",
+            "Mình đã xử lý tệp tải lên nhưng chưa nhận được phần tóm tắt dễ đọc. Bạn thử lại hoặc ghi chú ngắn tệp này là gì nhé.",
+          );
     if (pendingDocumentImport) {
       const scanInstruction =
         pendingDocumentImport.transactionItems && pendingDocumentImport.transactionItems.length > 0
-          ? "I found multiple transactions in the scan. Choose which ones to add using the checkboxes under the chat."
-          : "Use the buttons under the chat to save this to your ledger as read, or edit details first. Edits are stored with the image for optional future training export.";
-      assistantMessage = `${assistantMessage}\n\n---\nFrom your file (readout):\n${pendingDocumentImport.extractedTextSummary}\n\n---\n${scanInstruction}`;
+          ? languageText(
+              responseLanguage,
+              "I found multiple transactions in the scan. Choose which ones to add using the checkboxes under the chat.",
+              "Mình thấy nhiều giao dịch trong ảnh quét. Hãy chọn giao dịch muốn thêm bằng các ô chọn bên dưới khung chat.",
+            )
+          : languageText(
+              responseLanguage,
+              "Use the buttons under the chat to save this to your ledger as read, or edit details first. Edits are stored with the image for optional future training export.",
+              "Dùng các nút bên dưới khung chat để lưu vào sổ chi tiêu như đã đọc, hoặc chỉnh chi tiết trước. Phần chỉnh sửa sẽ được lưu cùng ảnh để có thể xuất dữ liệu huấn luyện sau này.",
+            );
+      const readoutLabel = languageText(responseLanguage, "From your file (readout):", "Nội dung đọc từ tệp của bạn:");
+      assistantMessage = `${assistantMessage}\n\n---\n${readoutLabel}\n${pendingDocumentImport.extractedTextSummary}\n\n---\n${scanInstruction}`;
     }
     if (
       data.documentKind === "freeform_transaction" &&
@@ -962,6 +1030,9 @@ export async function handleChatInput(formData: FormData) {
         const editPayload = {
           merchantHint: edit.merchantHint ?? null,
           dateHint: edit.dateHint ?? null,
+          walletHint: edit.walletHint ?? null,
+          categoryHint: edit.categoryHint ?? null,
+          memoHint: edit.memoHint ?? null,
           newAmount: typeof edit.newAmount === "number" ? edit.newAmount : null,
           newMemo: edit.newMemo ?? null,
           newCategory: edit.newCategory ?? null,
@@ -974,10 +1045,17 @@ export async function handleChatInput(formData: FormData) {
             matchedCount: preview.matchedCount,
             scopeLabel:
               editPayload.merchantHint?.trim() ||
+              editPayload.walletHint?.trim() ||
+              editPayload.categoryHint?.trim() ||
+              editPayload.memoHint?.trim() ||
               editPayload.dateHint?.trim() ||
               "matching transactions",
           };
-          assistantMessage = `I found ${preview.matchedCount} matching transactions for ${pendingLedgerEdit.scopeLabel}. Please click Proceed in the chat window to apply this bulk edit.`;
+          assistantMessage = languageText(
+            responseLanguage,
+            `I found ${preview.matchedCount} matching transactions for ${pendingLedgerEdit.scopeLabel}. Please click Proceed in the chat window to apply this bulk edit.`,
+            `Mình tìm thấy ${preview.matchedCount} giao dịch khớp với ${pendingLedgerEdit.scopeLabel}. Hãy bấm Tiếp tục trong khung chat để áp dụng chỉnh sửa hàng loạt này.`,
+          );
         } else {
           const result = await applyLedgerEdit(prisma, userId, editPayload);
           assistantMessage = `${assistantMessage}\n\n${result.detail}`;
@@ -1053,7 +1131,11 @@ export async function handleChatInput(formData: FormData) {
               label: match.merchant ?? match.memo ?? "pending item",
               cadenceText: data.pendingRecurrenceUpdate.cadenceText.trim(),
             };
-            assistantMessage = `${assistantMessage}\n\nGot it — set "${pendingRecurrenceApplied.label}" to ${pendingRecurrenceApplied.cadenceText}.`;
+            assistantMessage = `${assistantMessage}\n\n${languageText(
+              responseLanguage,
+              `Got it — set "${pendingRecurrenceApplied.label}" to ${pendingRecurrenceApplied.cadenceText}.`,
+              `Đã hiểu — mình đặt "${pendingRecurrenceApplied.label}" thành ${pendingRecurrenceApplied.cadenceText}.`,
+            )}`;
           }
         }
       } catch {

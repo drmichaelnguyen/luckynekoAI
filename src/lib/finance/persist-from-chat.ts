@@ -255,13 +255,30 @@ export async function persistTransactionListLedgerEntries(
 export type LedgerEditRequest = {
   merchantHint: string | null;
   dateHint: string | null;
+  walletHint?: string | null;
+  categoryHint?: string | null;
+  memoHint?: string | null;
   newAmount: number | null;
   newMemo: string | null;
   newCategory: string | null;
   newMerchant?: string | null;
 };
 
-type LedgerEditTarget = Prisma.TransactionGetPayload<{ include: { category: true } }>;
+type LedgerEditTarget = Prisma.TransactionGetPayload<{
+  include: { wallet: true; category: { include: { parent: true } } };
+}>;
+
+function normalizeSearchText(value: string | null | undefined): string {
+  return value?.trim().toLowerCase() ?? "";
+}
+
+function textMatchesHint(value: string | null | undefined, hint: string | null | undefined): boolean {
+  const normalizedHint = normalizeSearchText(hint);
+  if (!normalizedHint) return true;
+  const normalizedValue = normalizeSearchText(value);
+  if (!normalizedValue) return false;
+  return normalizedValue.includes(normalizedHint) || normalizedHint.includes(normalizedValue);
+}
 
 async function resolveLedgerEditTargets(
   db: PrismaClient,
@@ -270,6 +287,9 @@ async function resolveLedgerEditTargets(
 ): Promise<{ targets: LedgerEditTarget[]; useBulkMatch: boolean }> {
   const hasMerchantHint = typeof edit.merchantHint === "string" && edit.merchantHint.trim().length > 0;
   const hasDateHint = typeof edit.dateHint === "string" && edit.dateHint.trim().length > 0;
+  const hasWalletHint = typeof edit.walletHint === "string" && edit.walletHint.trim().length > 0;
+  const hasCategoryHint = typeof edit.categoryHint === "string" && edit.categoryHint.trim().length > 0;
+  const hasMemoHint = typeof edit.memoHint === "string" && edit.memoHint.trim().length > 0;
 
   const where: Prisma.TransactionWhereInput = {
     userId,
@@ -284,23 +304,31 @@ async function resolveLedgerEditTargets(
     }
   }
 
-  const useBulkMatch = hasMerchantHint || hasDateHint;
+  const useBulkMatch = hasMerchantHint || hasDateHint || hasWalletHint || hasCategoryHint || hasMemoHint;
   const recentTx = await db.transaction.findMany({
     where,
     orderBy: { occurredAt: "desc" },
     take: useBulkMatch ? undefined : 50,
-    include: { category: true },
+    include: { wallet: true, category: { include: { parent: true } } },
   });
 
-  const merchantHint = edit.merchantHint?.trim().toLowerCase() ?? null;
-  const matchingTx =
-    merchantHint && useBulkMatch
-      ? recentTx.filter(
-          (tx) =>
-            tx.merchant?.toLowerCase().includes(merchantHint) ||
-            tx.memo?.toLowerCase().includes(merchantHint),
-        )
-      : recentTx;
+  const merchantHint = edit.merchantHint?.trim() ?? null;
+  const walletHint = edit.walletHint?.trim() ?? null;
+  const categoryHint = edit.categoryHint?.trim() ?? null;
+  const memoHint = edit.memoHint?.trim() ?? null;
+  const matchingTx = useBulkMatch
+    ? recentTx.filter((tx) => {
+        const categoryPath = tx.category?.parent?.name
+          ? `${tx.category.parent.name} ${tx.category.name}`
+          : tx.category?.name ?? "";
+        const matchesMerchant =
+          !merchantHint || textMatchesHint(tx.merchant, merchantHint) || textMatchesHint(tx.memo, merchantHint);
+        const matchesWallet = !walletHint || textMatchesHint(tx.wallet.name, walletHint);
+        const matchesCategory = !categoryHint || textMatchesHint(categoryPath, categoryHint);
+        const matchesMemo = !memoHint || textMatchesHint(tx.memo, memoHint);
+        return matchesMerchant && matchesWallet && matchesCategory && matchesMemo;
+      })
+    : recentTx;
 
   const targets = useBulkMatch ? matchingTx : [matchingTx[0]].filter((tx): tx is LedgerEditTarget => Boolean(tx));
   return { targets, useBulkMatch };
