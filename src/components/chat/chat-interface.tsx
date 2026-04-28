@@ -11,6 +11,8 @@ import {
   Square,
   User,
   Volume2,
+  ThumbsDown,
+  ThumbsUp,
 } from "lucide-react";
 import { useSession } from "next-auth/react";
 
@@ -31,6 +33,7 @@ import {
   getShareImportAction,
   handleChatInput,
 } from "@/actions/chat";
+import { recordChatReplyFeedbackAction } from "@/actions/chat-feedback";
 import { getPendingConfirmCountAction } from "@/actions/finance";
 import {
   AdvancedToolsPanel,
@@ -40,6 +43,7 @@ import { BottomNav } from "@/components/chat/bottom-nav";
 import { DailySpendCheckinBanner } from "@/components/chat/daily-spend-checkin-banner";
 import { DocumentImportBar } from "@/components/chat/document-import-bar";
 import { LedgerEditConfirmBar } from "@/components/chat/ledger-edit-confirm-bar";
+import { AnalyticsChatCard, type ChatAnalyticsStructured } from "@/components/chat/analytics-card";
 import { LuckyNekoAvatar, LuckyNekoMascot } from "@/components/mascot/lucky-neko";
 import { useLocale } from "@/contexts/locale-context";
 import { Button } from "@/components/ui/button";
@@ -55,19 +59,38 @@ import {
 import { localCalendarYmd } from "@/lib/date/local-ymd";
 import { useDailySpendCheckin } from "@/hooks/use-daily-spend-checkin";
 import { useVoiceChat } from "@/hooks/use-voice-chat";
+import type { Locale } from "@/lib/i18n/config";
 import { cn } from "@/lib/utils";
 
 function randomId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function defaultWelcomeMessages(): ChatMessage[] {
+function buildReplyFeedbackContext(messages: ChatMessage[], assistantIndex: number): string {
+  const start = Math.max(0, assistantIndex - 4);
+  return JSON.stringify(
+    messages.slice(start, assistantIndex + 1).map((message) => ({
+      role: message.role,
+      content: message.content,
+    })),
+    null,
+    2,
+  );
+}
+
+function welcomeText(locale: Locale): string {
+  if (locale === "vi") {
+    return "Chào bạn — mình là NekoZeni, chú mèo thần tài giữ sổ chi tiêu của bạn. Hãy nói bạn vừa mua gì, hoặc tải lên hóa đơn, bill, hay phiếu lương từ Canada hoặc Việt Nam. Mình sẽ đọc thông tin chính và hỏi thêm nếu thiếu chi tiết quan trọng.";
+  }
+  return "Hi — I’m NekoZeni, your little lucky-cat treasurer. Tell me what you bought, or upload a receipt, bill, or payroll slip from Canada or Vietnam. I’ll extract the key fields and ask a quick follow-up if anything important is missing.";
+}
+
+function defaultWelcomeMessages(locale: Locale): ChatMessage[] {
   return [
     {
       id: "welcome",
       role: "assistant",
-      content:
-        "Hi — I’m NekoZeni, your little lucky-cat treasurer. Tell me what you bought, or upload a receipt, bill, or payroll slip from Canada or Vietnam. I’ll extract the key fields and ask a quick follow-up if anything important is missing.",
+      content: welcomeText(locale),
     },
   ];
 }
@@ -102,6 +125,20 @@ function pastedImageName(mimeType: string, index: number): string {
   return `clipboard-image-${stamp}-${index + 1}.${ext}`;
 }
 
+function parseAnalyticsStructured(value: string): ChatAnalyticsStructured | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const maybe = parsed as Partial<ChatAnalyticsStructured> & {
+      analytics?: unknown;
+    };
+    if (maybe.documentKind !== "analytics" || !maybe.analytics || typeof maybe.analytics !== "object") return null;
+    return maybe as ChatAnalyticsStructured;
+  } catch {
+    return null;
+  }
+}
+
 type ChatSendResult =
   | { ok: true; speakText: string }
   | { ok: false; error: string; restoreComposer: boolean };
@@ -113,7 +150,7 @@ export function ChatInterface() {
   const importId = searchParams.get("importId");
   const { data: session, status } = useSession();
 
-  const [messages, setMessages] = useState<ChatMessage[]>(() => defaultWelcomeMessages());
+  const [messages, setMessages] = useState<ChatMessage[]>(() => defaultWelcomeMessages(locale));
   const messagesRef = useRef(messages);
 
   const [draft, setDraft] = useState("");
@@ -131,6 +168,7 @@ export function ChatInterface() {
   const [pendingLedgerEdit, setPendingLedgerEdit] = useState<PendingLedgerEdit | null>(null);
   const [packedFinancialSummary, setPackedFinancialSummary] = useState("");
   const [packedThroughIndex, setPackedThroughIndex] = useState(0);
+  const [replyFeedbackBusyId, setReplyFeedbackBusyId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -161,13 +199,20 @@ export function ChatInterface() {
     }
     const uid = session.user.id;
     if (lastSessionUserIdRef.current && lastSessionUserIdRef.current !== uid) {
-      setMessages(defaultWelcomeMessages());
+      setMessages(defaultWelcomeMessages(locale));
       setPackedFinancialSummary("");
       setPackedThroughIndex(0);
       chatHydratedKeyRef.current = "";
     }
     lastSessionUserIdRef.current = uid;
-  }, [status, session?.user?.id]);
+  }, [locale, status, session?.user?.id]);
+
+  useEffect(() => {
+    setMessages((prev) => {
+      if (prev.length !== 1 || prev[0]?.id !== "welcome") return prev;
+      return defaultWelcomeMessages(locale);
+    });
+  }, [locale]);
 
   useEffect(() => {
     if (status !== "authenticated" || !session?.user?.id || typeof window === "undefined") return;
@@ -191,14 +236,18 @@ export function ChatInterface() {
         } catch {
           /* ignore */
         }
-        setMessages(defaultWelcomeMessages());
+        setMessages(defaultWelcomeMessages(locale));
         setPackedFinancialSummary("");
         setPackedThroughIndex(0);
         chatHydratedKeyRef.current = key;
         return;
       }
       if (Array.isArray(data.messages) && data.messages.length > 0) {
-        setMessages(data.messages);
+        setMessages(
+          data.messages.length === 1 && data.messages[0]?.id === "welcome"
+            ? defaultWelcomeMessages(locale)
+            : data.messages,
+        );
         setPackedFinancialSummary(typeof data.packedFinancialSummary === "string" ? data.packedFinancialSummary : "");
         setPackedThroughIndex(
           typeof data.packedThroughIndex === "number" && data.packedThroughIndex >= 0
@@ -210,7 +259,7 @@ export function ChatInterface() {
       /* ignore corrupt storage */
     }
     chatHydratedKeyRef.current = key;
-  }, [status, session?.user?.id]);
+  }, [locale, status, session?.user?.id]);
 
   useEffect(() => {
     if (status !== "authenticated" || !session?.user?.id || typeof window === "undefined") return;
@@ -312,7 +361,7 @@ export function ChatInterface() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, isPending]);
+  }, [messages, isPending, pendingDocumentImport, pendingLedgerEdit]);
 
   const onPickFiles = (picked: FileList | null) => {
     if (!picked || picked.length === 0) return;
@@ -409,6 +458,7 @@ export function ChatInterface() {
 
         const formData = new FormData();
         formData.set("message", trimmed);
+        formData.set("locale", locale);
         if (summary.length > 0) {
           formData.set("conversationPackedSummary", summary);
         }
@@ -420,7 +470,16 @@ export function ChatInterface() {
           formData.set("shareContext", JSON.stringify(outgoingShare));
         }
 
-        const result = await handleChatInput(formData);
+        const result = (await handleChatInput(formData)) as
+          | {
+              ok: true;
+              assistantMessage: string;
+              structured: unknown;
+              followUpQuestion?: string | null;
+              pendingDocumentImport?: PendingDocumentImport;
+              pendingLedgerEdit?: PendingLedgerEdit;
+            }
+          | { ok: false; error: string };
 
         if (packedThisRound) {
           setPackedFinancialSummary(summary);
@@ -490,7 +549,7 @@ export function ChatInterface() {
         setChatBusy(false);
       }
     },
-    [refreshPendingCount],
+    [locale, refreshPendingCount],
   );
 
   const sendSpokenText = useCallback(
@@ -553,6 +612,49 @@ export function ChatInterface() {
     });
   };
 
+  const handleReplyFeedback = useCallback(
+    async (messageIndex: number, messageId: string, rating: 1 | -1) => {
+      if (!session?.user?.id || replyFeedbackBusyId === messageId) return;
+      const message = messagesRef.current[messageIndex];
+      if (!message || message.role !== "assistant") return;
+      const previousFeedback = message.replyFeedback;
+
+      const contextJson = buildReplyFeedbackContext(messagesRef.current, messageIndex);
+      const lastUserTurn = [...messagesRef.current.slice(0, messageIndex)].reverse().find((item) => item.role === "user");
+
+      setReplyFeedbackBusyId(messageId);
+      setMessages((prev) =>
+        prev.map((item) => (item.id === messageId ? { ...item, replyFeedback: rating } : item)),
+      );
+
+      try {
+        const result = await recordChatReplyFeedbackAction({
+          assistantMessageId: messageId,
+          rating,
+          assistantMessage: message.content,
+          userPrompt: lastUserTurn?.content ?? null,
+          conversationJson: contextJson,
+        });
+        if (!result.ok) {
+          setMessages((prev) =>
+            prev.map((item) =>
+              item.id === messageId ? { ...item, replyFeedback: previousFeedback } : item,
+            ),
+          );
+        }
+      } catch {
+        setMessages((prev) =>
+          prev.map((item) =>
+            item.id === messageId ? { ...item, replyFeedback: previousFeedback } : item,
+          ),
+        );
+      } finally {
+        setReplyFeedbackBusyId((current) => (current === messageId ? null : current));
+      }
+    },
+    [replyFeedbackBusyId, session?.user?.id],
+  );
+
   return (
     <div className="flex min-h-dvh flex-col bg-background">
       {/* ── Google-style top bar ── */}
@@ -576,7 +678,7 @@ export function ChatInterface() {
               title="New chat"
               aria-label="Start new chat"
               onClick={() => {
-                setMessages(defaultWelcomeMessages());
+                setMessages(defaultWelcomeMessages(locale));
                 setPackedFinancialSummary("");
                 setPackedThroughIndex(0);
                 chatHydratedKeyRef.current = "";
@@ -624,7 +726,7 @@ export function ChatInterface() {
         <ScrollArea className="min-h-[calc(100dvh-7.5rem)] pr-1">
           <div className="space-y-3 pb-4">
             <AnimatePresence initial={false}>
-              {messages.map((m) => (
+              {messages.map((m, index) => (
                 <motion.div
                   key={m.id}
                   layout
@@ -687,21 +789,64 @@ export function ChatInterface() {
                         ) : null}
                       </div>
 
-                      {m.structuredJson ? (
-                        <details className="rounded-xl border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-                          <summary className="cursor-pointer select-none text-foreground">
-                            Structured JSON (for DB insert)
-                          </summary>
-                          <motion.pre
-                            className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-[11px] leading-snug text-foreground"
-                            initial={{ opacity: 0, y: 6 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ duration: 0.2 }}
+                      {m.role === "assistant" && m.id !== "welcome" ? (
+                        <div className="flex items-center gap-1 pl-1">
+                          <button
+                            type="button"
+                            className={cn(
+                              "inline-flex h-8 items-center gap-1 rounded-full border px-2 text-xs transition",
+                              m.replyFeedback === 1
+                                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700"
+                                : "bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
+                            )}
+                            aria-label="Thumbs up"
+                            title="Thumbs up"
+                            disabled={replyFeedbackBusyId === m.id}
+                            onClick={() => handleReplyFeedback(index, m.id, 1)}
                           >
-                            {m.structuredJson}
-                          </motion.pre>
-                        </details>
+                            <ThumbsUp className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            className={cn(
+                              "inline-flex h-8 items-center gap-1 rounded-full border px-2 text-xs transition",
+                              m.replyFeedback === -1
+                                ? "border-rose-500/40 bg-rose-500/10 text-rose-700"
+                                : "bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
+                            )}
+                            aria-label="Thumbs down"
+                            title="Thumbs down"
+                            disabled={replyFeedbackBusyId === m.id}
+                            onClick={() => handleReplyFeedback(index, m.id, -1)}
+                          >
+                            <ThumbsDown className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       ) : null}
+
+                      {(() => {
+                        const analyticsStructured = m.structuredJson ? parseAnalyticsStructured(m.structuredJson) : null;
+                        return (
+                          <>
+                            {analyticsStructured ? <AnalyticsChatCard analytics={analyticsStructured.analytics} /> : null}
+                            {m.structuredJson ? (
+                              <details className="rounded-xl border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                                <summary className="cursor-pointer select-none text-foreground">
+                                  Structured JSON (for DB insert)
+                                </summary>
+                                <motion.pre
+                                  className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-[11px] leading-snug text-foreground"
+                                  initial={{ opacity: 0, y: 6 }}
+                                  animate={{ opacity: 1, y: 0 }}
+                                  transition={{ duration: 0.2 }}
+                                >
+                                  {m.structuredJson}
+                                </motion.pre>
+                              </details>
+                            ) : null}
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
                 </motion.div>

@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
+import { ChevronDown } from "lucide-react";
 
 import {
   commitAndPushAdminPortalAction,
@@ -9,6 +10,7 @@ import {
   listUsersAction,
   resetUserPasswordAction,
   pushAdminPortalAction,
+  runAdminBenchmarkAction,
   testAdminImageAction,
   testAdminModelAction,
   updateAdminRuntimeSettingsAction,
@@ -17,12 +19,21 @@ import {
   type AdminUserRow,
   type AdminRuntimeSettings,
 } from "@/actions/admin";
+import type { BenchmarkRun, BenchmarkTaskResult } from "@/lib/ai/model-benchmark";
+import { DEFAULT_9ROUTER_MODEL } from "@/lib/ai/9router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("en-US").format(value);
+}
+
+function formatDecimal(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 1,
+    minimumFractionDigits: Number.isInteger(value) ? 0 : 1,
+  }).format(value);
 }
 
 function formatDateTime(value: string | null) {
@@ -55,6 +66,111 @@ function MetricCard(props: { label: string; value: string; tone?: "default" | "d
   );
 }
 
+function CollapsibleSection(props: {
+  title: string;
+  description?: string;
+  actions?: ReactNode;
+  children: ReactNode;
+  defaultOpen?: boolean;
+  bodyClassName?: string;
+}) {
+  const [open, setOpen] = useState(Boolean(props.defaultOpen));
+
+  return (
+    <section className="overflow-hidden rounded-lg border bg-card">
+      <div className="flex items-stretch justify-between gap-3 border-b bg-muted/30 px-4 py-3">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+          onClick={() => setOpen((current) => !current)}
+          aria-expanded={open}
+        >
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold">{props.title}</h2>
+            {props.description ? <p className="text-xs text-muted-foreground">{props.description}</p> : null}
+          </div>
+          <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
+        </button>
+        <div className="flex shrink-0 items-center gap-2">{props.actions}</div>
+      </div>
+      {open ? <div className={cn("p-4", props.bodyClassName)}>{props.children}</div> : null}
+    </section>
+  );
+}
+
+function BenchmarkTaskCard(props: { result: BenchmarkTaskResult }) {
+  const { result } = props;
+  return (
+    <div className="rounded-lg border bg-background p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="font-medium">{result.title}</div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            Score {result.overallScore}/100 · {result.turnsToResolution} turn{result.turnsToResolution === 1 ? "" : "s"} · {result.judge.userSatisfaction}/5 satisfaction
+          </div>
+        </div>
+        <div className="rounded-full border px-2 py-1 text-xs">
+          {result.judge.taskSuccess ? "Passed" : "Needs work"}
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2 text-xs text-muted-foreground md:grid-cols-2">
+        <div>Clarifications: {result.clarificationCount}</div>
+        <div>Understood first prompt: {result.judge.understoodFirstPrompt ? "Yes" : "No"}</div>
+        <div>Answer quality: {result.judge.answerQuality}/5</div>
+        <div>Clarification quality: {result.judge.clarificationQuality}/5</div>
+      </div>
+      <div className="mt-3 rounded-md border bg-muted/20 p-3 text-sm">
+        <div className="text-xs uppercase tracking-wide text-muted-foreground">Judge notes</div>
+        <div className="mt-1">{result.judge.notes}</div>
+      </div>
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">First reply</div>
+          <div className="mt-1 whitespace-pre-wrap rounded-md border bg-muted/20 p-3 text-sm">{result.firstReply}</div>
+        </div>
+        <div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">Final reply</div>
+          <div className="mt-1 whitespace-pre-wrap rounded-md border bg-muted/20 p-3 text-sm">{result.finalReply}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type BenchmarkModelOption = {
+  value: string;
+  label: string;
+};
+
+function buildBenchmarkModelOptions(
+  snapshot: AdminPortalSnapshot | null,
+  settings: AdminRuntimeSettings | null,
+): BenchmarkModelOption[] {
+  const options = new Map<string, BenchmarkModelOption>();
+  const add = (value: string | null | undefined, label: string) => {
+    const trimmed = value?.trim() ?? "";
+    if (!trimmed || options.has(trimmed)) return;
+    options.set(trimmed, { value: trimmed, label });
+  };
+
+  const workingModels = (snapshot?.models ?? [])
+    .filter((row) => row.provider === "9router" && row.model.trim() && row.model !== "image-creation" && row.apiCalls > row.failedApiCalls)
+    .sort((a, b) => b.apiCalls - a.apiCalls || a.model.localeCompare(b.model));
+
+  for (const row of workingModels) {
+    const workingCount = row.apiCalls - row.failedApiCalls;
+    add(row.model, `${row.model} (${workingCount} working)`);
+  }
+
+  const routingMini = settings?.routing.nineRouterMiniModel?.trim();
+  const routingLarge = settings?.routing.nineRouterModel?.trim();
+  add(routingMini, `${routingMini} (routing first-pass)`);
+  add(routingLarge, `${routingLarge} (routing large)`);
+  add(DEFAULT_9ROUTER_MODEL, `${DEFAULT_9ROUTER_MODEL} (default)`);
+
+  return Array.from(options.values());
+}
+
 export function AdminPortal() {
   const [users, setUsers] = useState<AdminUserRow[]>([]);
   const [snapshot, setSnapshot] = useState<AdminPortalSnapshot | null>(null);
@@ -72,9 +188,14 @@ export function AdminPortal() {
     "Create a square finance app icon for a money management app called NekoZeni. Show a friendly wallet with a coin, flat vector style, clean centered composition, teal and gold palette, transparent background, no text.",
   );
   const [imageTestResult, setImageTestResult] = useState<{ prompt: string; imageUrl: string; model: string; provider: string; latencyMs: number; requestUrl: string } | null>(null);
+  const [benchmarkCandidateModel, setBenchmarkCandidateModel] = useState("");
+  const [benchmarkJudgeModel, setBenchmarkJudgeModel] = useState("");
+  const [benchmarkResult, setBenchmarkResult] = useState<BenchmarkRun | null>(null);
+  const [benchmarkMsg, setBenchmarkMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [gitMessage, setGitMessage] = useState<{ text: string; ok: boolean } | null>(null);
   const [commitMessage, setCommitMessage] = useState("");
   const [isPending, startTransition] = useTransition();
+  const benchmarkModelOptions = useMemo(() => buildBenchmarkModelOptions(snapshot, settings), [snapshot, settings]);
 
   const refresh = useCallback(() => {
     setLoading(true);
@@ -90,6 +211,24 @@ export function AdminPortal() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (benchmarkModelOptions.length === 0) return;
+
+    const candidateFallback = settings?.routing.nineRouterMiniModel ?? benchmarkModelOptions[0].value;
+    const judgeFallback = settings?.routing.nineRouterModel ?? candidateFallback;
+
+    setBenchmarkCandidateModel((current) => {
+      if (current && benchmarkModelOptions.some((option) => option.value === current)) return current;
+      return candidateFallback;
+    });
+
+    setBenchmarkJudgeModel((current) => {
+      if (current && benchmarkModelOptions.some((option) => option.value === current)) return current;
+      if (judgeFallback !== candidateFallback) return judgeFallback;
+      return benchmarkModelOptions.find((option) => option.value !== candidateFallback)?.value ?? candidateFallback;
+    });
+  }, [benchmarkModelOptions, settings]);
 
   function flash(id: string, text: string, ok: boolean) {
     setMsg({ id, text, ok });
@@ -114,6 +253,11 @@ export function AdminPortal() {
   function flashImageTest(text: string, ok: boolean) {
     setImageTestMsg({ text, ok });
     window.setTimeout(() => setImageTestMsg(null), 7000);
+  }
+
+  function flashBenchmark(text: string, ok: boolean) {
+    setBenchmarkMsg({ text, ok });
+    window.setTimeout(() => setBenchmarkMsg(null), 7000);
   }
 
   function flashGit(text: string, ok: boolean) {
@@ -273,6 +417,32 @@ export function AdminPortal() {
     });
   }
 
+  function handleRunBenchmark() {
+    const candidateModel = benchmarkCandidateModel.trim();
+    const judgeModel = benchmarkJudgeModel.trim();
+    if (!candidateModel || !judgeModel) return;
+
+    startTransition(async () => {
+      const res = await runAdminBenchmarkAction({
+        candidateModel,
+        judgeModel,
+        url: settings?.routing.nineRouterUrl,
+      });
+
+      if (res.ok) {
+        setBenchmarkResult(res.run);
+        flashBenchmark(
+          `Benchmark finished: ${res.run.candidateModel} scored ${res.run.averageScore}/100 against ${res.run.judgeModel}.`,
+          true,
+        );
+        refresh();
+      } else {
+        setBenchmarkResult(null);
+        flashBenchmark(`Benchmark failed: ${res.error}`, false);
+      }
+    });
+  }
+
   const mergedUsers = useMemo(() => {
     const usageMap = new Map(snapshot?.users.map((row) => [row.id, row]) ?? []);
     return users.map((user) => ({
@@ -289,6 +459,7 @@ export function AdminPortal() {
           <p className="mt-1 text-sm text-muted-foreground">
             Separate admin interface for user access, model usage, token volume, and API failures.
           </p>
+          <p className="mt-1 text-xs text-muted-foreground">Sections are collapsed by default. Open only what you need.</p>
         </div>
         <Button type="button" variant="outline" onClick={refresh} disabled={loading || isPending}>
           Refresh
@@ -299,119 +470,111 @@ export function AdminPortal() {
         <p className="mt-8 text-sm text-muted-foreground">Loading admin data…</p>
       ) : (
         <div className="mt-8 space-y-8">
-          <section className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-            <MetricCard label="Users" value={formatNumber(snapshot.overview.totalUsers)} />
-            <MetricCard label="Active 30d" value={formatNumber(snapshot.overview.activeUsers30d)} />
-            <MetricCard label="API calls" value={formatNumber(snapshot.overview.totalApiCalls)} />
-            <MetricCard
-              label="API errors"
-              value={formatNumber(snapshot.overview.failedApiCalls)}
-              tone={snapshot.overview.failedApiCalls > 0 ? "danger" : "default"}
-            />
-            <MetricCard label="Tokens total" value={formatNumber(snapshot.overview.totalTokens)} />
-            <MetricCard label="Tokens 30d" value={formatNumber(snapshot.overview.tokens30d)} />
-          </section>
+          <CollapsibleSection title="Overview" description="High-level traffic and token totals.">
+            <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+              <MetricCard label="Users" value={formatNumber(snapshot.overview.totalUsers)} />
+              <MetricCard label="Active 30d" value={formatNumber(snapshot.overview.activeUsers30d)} />
+              <MetricCard label="API calls" value={formatNumber(snapshot.overview.totalApiCalls)} />
+              <MetricCard
+                label="API errors"
+                value={formatNumber(snapshot.overview.failedApiCalls)}
+                tone={snapshot.overview.failedApiCalls > 0 ? "danger" : "default"}
+              />
+              <MetricCard label="Tokens total" value={formatNumber(snapshot.overview.totalTokens)} />
+              <MetricCard label="Tokens 30d" value={formatNumber(snapshot.overview.tokens30d)} />
+            </div>
+          </CollapsibleSection>
 
-          <section className="rounded-lg border bg-card">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/30 px-4 py-3">
-              <div>
-                <h2 className="text-sm font-semibold">Release</h2>
-                <p className="text-xs text-muted-foreground">
-                  Shows the app package version and the current git checkout state.
-                </p>
-              </div>
-              <Button type="button" variant="outline" onClick={handlePullAndRestart} disabled={isPending}>
-                Pull latest and restart
-              </Button>
-            </div>
-            <div className="grid gap-4 p-4 md:grid-cols-2 xl:grid-cols-4">
-              <div>
-                <div className="text-xs uppercase tracking-wide text-muted-foreground">App version</div>
-                <div className="mt-2 text-lg font-semibold">{snapshot.release.appVersion}</div>
-              </div>
-              <div>
-                <div className="text-xs uppercase tracking-wide text-muted-foreground">Git version</div>
-                <div className="mt-2 text-lg font-semibold">{formatGitVersion(snapshot.release)}</div>
-              </div>
-              <div>
-                <div className="text-xs uppercase tracking-wide text-muted-foreground">Branch</div>
-                <div className="mt-2 text-lg font-semibold">{snapshot.release.git.branch}</div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  {snapshot.release.git.commitDate ? new Date(snapshot.release.git.commitDate).toLocaleDateString() : "Unknown date"}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs uppercase tracking-wide text-muted-foreground">Checkout state</div>
-                <div className="mt-2 text-lg font-semibold">
-                  {snapshot.release.git.dirty ? "Dirty" : "Clean"}
-                </div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  {snapshot.release.git.ahead != null && snapshot.release.git.behind != null
-                    ? `${snapshot.release.git.ahead} ahead / ${snapshot.release.git.behind} behind`
-                    : snapshot.release.git.subject ?? "No commit subject available"}
-                </div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  {snapshot.release.git.dirty
-                    ? "Local changes are present; pull may fail until the checkout is clean."
-                    : "Checkout is clean and ready for a pull."}
-                </div>
-              </div>
-            </div>
-            {releaseMsg ? (
-              <div className={cn("border-t px-4 py-3 text-sm", releaseMsg.ok ? "text-green-600" : "text-destructive")}>
-                {releaseMsg.text}
-              </div>
-            ) : null}
-          </section>
-
-          <section className="rounded-lg border bg-card">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/30 px-4 py-3">
-              <div>
-                <h2 className="text-sm font-semibold">Git Commands</h2>
-                <p className="text-xs text-muted-foreground">
-                  Common admin actions for publishing local changes without opening a shell.
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="outline" onClick={handlePush} disabled={isPending}>
-                  Push branch
+          <div className="grid gap-6 xl:grid-cols-2">
+            <CollapsibleSection
+              title="Release"
+              description="App package version and current git checkout state."
+              actions={
+                <Button type="button" variant="outline" onClick={handlePullAndRestart} disabled={isPending}>
+                  Pull latest and restart
                 </Button>
-                <Button type="button" onClick={handleCommitAndPush} disabled={isPending || !commitMessage.trim()}>
-                  Commit and push
-                </Button>
+              }
+            >
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <div>
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">App version</div>
+                  <div className="mt-2 text-lg font-semibold">{snapshot.release.appVersion}</div>
+                </div>
+                <div>
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Git version</div>
+                  <div className="mt-2 text-lg font-semibold">{formatGitVersion(snapshot.release)}</div>
+                </div>
+                <div>
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Branch</div>
+                  <div className="mt-2 text-lg font-semibold">{snapshot.release.git.branch}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {snapshot.release.git.commitDate ? new Date(snapshot.release.git.commitDate).toLocaleDateString() : "Unknown date"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Checkout state</div>
+                  <div className="mt-2 text-lg font-semibold">
+                    {snapshot.release.git.dirty ? "Dirty" : "Clean"}
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {snapshot.release.git.ahead != null && snapshot.release.git.behind != null
+                      ? `${snapshot.release.git.ahead} ahead / ${snapshot.release.git.behind} behind`
+                      : snapshot.release.git.subject ?? "No commit subject available"}
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {snapshot.release.git.dirty
+                      ? "Local changes are present; pull may fail until the checkout is clean."
+                      : "Checkout is clean and ready for a pull."}
+                  </div>
+                </div>
               </div>
-            </div>
-            <div className="space-y-4 p-4">
-              <label className="block space-y-1 text-sm">
-                <span className="text-xs uppercase tracking-wide text-muted-foreground">Commit message</span>
-                <Input
-                  type="text"
-                  value={commitMessage}
-                  onChange={(e) => setCommitMessage(e.target.value)}
-                  placeholder='e.g. "Update admin portal"'
-                  disabled={isPending}
-                />
-              </label>
-              <div className="text-xs text-muted-foreground">
-                Commit and push stages all local changes, then publishes them to the current branch.
-              </div>
-              {gitMessage ? (
-                <div className={cn("rounded-md border px-3 py-2 text-sm", gitMessage.ok ? "text-green-600" : "text-destructive")}>
-                  {gitMessage.text}
+              {releaseMsg ? (
+                <div className={cn("mt-4 rounded-md border px-3 py-2 text-sm", releaseMsg.ok ? "text-green-600" : "text-destructive")}>
+                  {releaseMsg.text}
                 </div>
               ) : null}
-            </div>
-          </section>
+            </CollapsibleSection>
 
-          <section className="grid gap-6 xl:grid-cols-2">
-            <div className="rounded-lg border bg-card">
-              <div className="border-b bg-muted/30 px-4 py-3">
-                <h2 className="text-sm font-semibold">Model Routing</h2>
-                <p className="text-xs text-muted-foreground">
-                  Controls which provider and model names the AI actions use.
-                </p>
+            <CollapsibleSection
+              title="Git commands"
+              description="Common admin actions for publishing local changes without opening a shell."
+              actions={
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="outline" onClick={handlePush} disabled={isPending}>
+                    Push branch
+                  </Button>
+                  <Button type="button" onClick={handleCommitAndPush} disabled={isPending || !commitMessage.trim()}>
+                    Commit and push
+                  </Button>
+                </div>
+              }
+            >
+              <div className="space-y-4">
+                <label className="block space-y-1 text-sm">
+                  <span className="text-xs uppercase tracking-wide text-muted-foreground">Commit message</span>
+                  <Input
+                    type="text"
+                    value={commitMessage}
+                    onChange={(e) => setCommitMessage(e.target.value)}
+                    placeholder='e.g. "Update admin portal"'
+                    disabled={isPending}
+                  />
+                </label>
+                <div className="text-xs text-muted-foreground">
+                  Commit and push stages all local changes, then publishes them to the current branch.
+                </div>
+                {gitMessage ? (
+                  <div className={cn("rounded-md border px-3 py-2 text-sm", gitMessage.ok ? "text-green-600" : "text-destructive")}>
+                    {gitMessage.text}
+                  </div>
+                ) : null}
               </div>
-              <div className="space-y-4 p-4">
+            </CollapsibleSection>
+          </div>
+
+          <div className="grid gap-6 xl:grid-cols-2">
+            <CollapsibleSection title="AI routing" description="Controls which provider and model names the AI actions use.">
+              <div className="space-y-4">
                 <div className="grid gap-4 md:grid-cols-2">
                   <label className="space-y-1 text-sm">
                     <span className="text-xs uppercase tracking-wide text-muted-foreground">Chat provider</span>
@@ -572,16 +735,13 @@ export function AdminPortal() {
                   ) : null}
                 </div>
               </div>
-            </div>
+            </CollapsibleSection>
 
-            <div className="rounded-lg border bg-card">
-              <div className="border-b bg-muted/30 px-4 py-3">
-                <h2 className="text-sm font-semibold">Machine Learning</h2>
-                <p className="text-xs text-muted-foreground">
-                  Toggles the app-wide learning signals used in chat and import flows.
-                </p>
-              </div>
-              <div className="space-y-4 p-4">
+            <CollapsibleSection
+              title="Machine learning"
+              description="Toggles the app-wide learning signals used in chat and import flows."
+            >
+              <div className="space-y-4">
                 <label className="flex items-center justify-between gap-4 rounded-md border px-3 py-2">
                   <div>
                     <div className="text-sm font-medium">Learn chat preferences</div>
@@ -636,18 +796,152 @@ export function AdminPortal() {
                 </div>
               </div>
               {settingsMsg ? (
-                <div className={cn("border-t px-4 py-3 text-sm", settingsMsg.ok ? "text-green-600" : "text-destructive")}>
+                <div className={cn("mt-4 rounded-md border px-3 py-2 text-sm", settingsMsg.ok ? "text-green-600" : "text-destructive")}>
                   {settingsMsg.text}
                 </div>
               ) : null}
-            </div>
-          </section>
+            </CollapsibleSection>
+          </div>
 
-          <section className="grid gap-6 xl:grid-cols-[1.3fr_1fr]">
-            <div className="overflow-hidden rounded-lg border">
-              <div className="border-b bg-muted/30 px-4 py-3">
-                <h2 className="text-sm font-semibold">Users</h2>
+          <CollapsibleSection
+            title="Model benchmark"
+            description="Runs a fixed task set against the candidate model, then blends the judge score with live thumbs-up/thumbs-down feedback from real chat replies."
+          >
+            <div className="grid gap-6 xl:grid-cols-[1fr_1.2fr]">
+              <div className="space-y-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="space-y-1 text-sm">
+                    <span className="text-xs uppercase tracking-wide text-muted-foreground">Candidate model</span>
+                    <select
+                      className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                      value={benchmarkCandidateModel}
+                      onChange={(e) => setBenchmarkCandidateModel(e.target.value)}
+                      disabled={!settings || isPending || benchmarkModelOptions.length === 0}
+                    >
+                      {benchmarkModelOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="space-y-1 text-sm">
+                    <span className="text-xs uppercase tracking-wide text-muted-foreground">Judge model</span>
+                    <select
+                      className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                      value={benchmarkJudgeModel}
+                      onChange={(e) => setBenchmarkJudgeModel(e.target.value)}
+                      disabled={!settings || isPending || benchmarkModelOptions.length === 0}
+                    >
+                      {benchmarkModelOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <div className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
+                  The dropdown is populated from working 9router models observed in the app, plus the current routing defaults.
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    onClick={handleRunBenchmark}
+                    disabled={!settings || isPending || !benchmarkCandidateModel.trim() || !benchmarkJudgeModel.trim()}
+                  >
+                    Run benchmark
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setBenchmarkCandidateModel(settings?.routing.nineRouterMiniModel ?? "");
+                      setBenchmarkJudgeModel(settings?.routing.nineRouterModel ?? "");
+                    }}
+                    disabled={!settings || isPending}
+                  >
+                    Reset to routing defaults
+                  </Button>
+                </div>
+                {benchmarkMsg ? (
+                  <div className={cn("rounded-md border px-3 py-2 text-sm", benchmarkMsg.ok ? "text-green-600" : "text-destructive")}>
+                    {benchmarkMsg.text}
+                  </div>
+                ) : null}
+                {benchmarkResult ? (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <MetricCard label="Overall score" value={`${formatDecimal(benchmarkResult.averageScore)}/100`} />
+                    <MetricCard label="Success rate" value={`${formatDecimal(benchmarkResult.successRate)}%`} />
+                    <MetricCard label="Satisfaction" value={`${formatDecimal(benchmarkResult.averageSatisfaction)}/5`} />
+                    <MetricCard
+                      label="Real user satisfaction"
+                      value={
+                        benchmarkResult.realUserSatisfaction == null
+                          ? "No votes yet"
+                          : `${formatDecimal(benchmarkResult.realUserSatisfaction)}/5`
+                      }
+                    />
+                    <MetricCard label="Clarification count" value={formatDecimal(benchmarkResult.averageClarificationCount)} />
+                    <MetricCard label="Turns to resolve" value={formatDecimal(benchmarkResult.averageTurnsToResolution)} />
+                    <MetricCard label="First-pass understanding" value={`${formatDecimal(benchmarkResult.firstPassUnderstandingRate)}%`} />
+                    <MetricCard label="Feedback votes" value={formatNumber(benchmarkResult.feedbackVotes)} />
+                  </div>
+                ) : null}
               </div>
+              <div className="space-y-4">
+                <div className="rounded-lg border bg-background p-4">
+                  <div className="font-medium">Latest run</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {benchmarkResult
+                      ? `${benchmarkResult.candidateModel} vs ${benchmarkResult.judgeModel} · ${new Date(benchmarkResult.createdAt).toLocaleString()}`
+                      : "No run in the current session yet."}
+                  </div>
+                  {benchmarkResult ? (
+                    <div className="mt-4 space-y-3">
+                      {benchmarkResult.results.map((result) => (
+                        <BenchmarkTaskCard key={result.taskId} result={result} />
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="rounded-lg border bg-background p-4">
+                  <div className="font-medium">Recent runs</div>
+                  <div className="mt-3 space-y-3">
+                    {snapshot.benchmarkHistory.length === 0 ? (
+                      <div className="text-sm text-muted-foreground">No saved benchmark runs yet.</div>
+                    ) : (
+                      snapshot.benchmarkHistory.map((run) => (
+                        <div key={run.id} className="rounded-md border px-3 py-2 text-sm">
+                          <div className="font-medium">
+                            {run.candidateModel} vs {run.judgeModel}
+                          </div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            {new Date(run.createdAt).toLocaleString()} · score {run.averageScore}/100 · success {formatDecimal(run.successRate)}%
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+                <div className="rounded-lg border bg-background p-4">
+                  <div className="font-medium">Live reply feedback</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {snapshot.replyFeedback.totalVotes > 0
+                      ? `${formatNumber(snapshot.replyFeedback.totalVotes)} votes · ${formatDecimal(snapshot.replyFeedback.thumbsUpRate ?? 0)}% thumbs up · ${formatDecimal(snapshot.replyFeedback.satisfactionScore ?? 0)}/5 satisfaction`
+                      : "No assistant reply votes have been recorded yet."}
+                  </div>
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <MetricCard label="Thumbs up" value={formatNumber(snapshot.replyFeedback.thumbsUp)} />
+                    <MetricCard label="Thumbs down" value={formatNumber(snapshot.replyFeedback.thumbsDown)} />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </CollapsibleSection>
+
+          <div className="grid gap-6 xl:grid-cols-[1.3fr_1fr]">
+            <CollapsibleSection title="Users" description="User access, roles, and password resets.">
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">
                   <thead className="bg-muted/20 text-left text-muted-foreground">
@@ -736,13 +1030,10 @@ export function AdminPortal() {
                   </tbody>
                 </table>
               </div>
-            </div>
+            </CollapsibleSection>
 
             <div className="space-y-6">
-              <div className="overflow-hidden rounded-lg border">
-                <div className="border-b bg-muted/30 px-4 py-3">
-                  <h2 className="text-sm font-semibold">Model usage</h2>
-                </div>
+              <CollapsibleSection title="Model usage" description="Per-model API calls, errors, and token totals.">
                 <div className="max-h-[420px] overflow-auto">
                   <table className="min-w-full text-sm">
                     <thead className="bg-muted/20 text-left text-muted-foreground">
@@ -770,12 +1061,9 @@ export function AdminPortal() {
                     </tbody>
                   </table>
                 </div>
-              </div>
+              </CollapsibleSection>
 
-              <div className="overflow-hidden rounded-lg border">
-                <div className="border-b bg-muted/30 px-4 py-3">
-                  <h2 className="text-sm font-semibold">Workflows</h2>
-                </div>
+              <CollapsibleSection title="Workflows" description="Feature-level API calls, errors, and token totals.">
                 <div className="max-h-[320px] overflow-auto">
                   <table className="min-w-full text-sm">
                     <thead className="bg-muted/20 text-left text-muted-foreground">
@@ -798,14 +1086,11 @@ export function AdminPortal() {
                     </tbody>
                   </table>
                 </div>
-              </div>
+              </CollapsibleSection>
             </div>
-          </section>
+          </div>
 
-          <section className="overflow-hidden rounded-lg border">
-            <div className="border-b bg-muted/30 px-4 py-3">
-              <h2 className="text-sm font-semibold">Recent API errors</h2>
-            </div>
+          <CollapsibleSection title="Recent API errors" description="The latest API failures recorded by the app.">
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead className="bg-muted/20 text-left text-muted-foreground">
@@ -840,7 +1125,7 @@ export function AdminPortal() {
                 </tbody>
               </table>
             </div>
-          </section>
+          </CollapsibleSection>
         </div>
       )}
     </div>

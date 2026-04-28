@@ -36,6 +36,7 @@ model User {
   financialPlans   FinancialPlan[]
   passwordResetTokens PasswordResetToken[]
   aiRequestLogs    AiRequestLog[]
+  replyFeedbacks   AssistantReplyFeedback[]
 }
 
 model AiRequestLog {
@@ -57,6 +58,23 @@ model AiRequestLog {
   @@index([userId, createdAt])
   @@index([provider, model, createdAt])
   @@index([success, createdAt])
+}
+
+model AssistantReplyFeedback {
+  id                  String   @id @default(cuid())
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assistantMessageId  String
+  rating              Int
+  assistantMessage    String?
+  userPrompt          String?
+  conversationJson    String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([assistantMessageId])
+  @@index([rating, createdAt])
 }
 
 model AdminSetting {

@@ -1,4 +1,5 @@
 export type ChatRole = "user" | "assistant";
+export type ChatReplyFeedbackRating = 1 | -1;
 
 export type ChatAttachmentMeta = {
   name: string;
@@ -11,6 +12,7 @@ export type ChatMessage = {
   content: string;
   attachments?: ChatAttachmentMeta[];
   structuredJson?: string;
+  replyFeedback?: ChatReplyFeedbackRating;
 };
 
 export type ReceiptSplitItem = {

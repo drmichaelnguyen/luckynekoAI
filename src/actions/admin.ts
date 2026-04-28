@@ -8,7 +8,10 @@ import {
   DEFAULT_9ROUTER_MODEL,
   normalize9RouterModel,
 } from "@/lib/ai/9router";
+import { runModelBenchmark, type BenchmarkRunSummary } from "@/lib/ai/model-benchmark";
+import { loadBenchmarkHistory, saveBenchmarkRun } from "@/lib/ai/model-benchmark-store";
 import { callIconImageGeneration } from "@/lib/ai/image-generation";
+import { loadReplyFeedbackStats } from "@/lib/ai/reply-feedback";
 import { recordAiRequestLog } from "@/lib/ai/telemetry";
 import {
   loadAdminRuntimeSettings,
@@ -90,6 +93,16 @@ export type AdminPortalSnapshot = {
     appVersion: string;
     git: GitStatusInfo;
   };
+  benchmarkHistory: BenchmarkRunSummary[];
+  replyFeedback: {
+    totalVotes: number;
+    thumbsUp: number;
+    thumbsDown: number;
+    thumbsUpRate: number | null;
+    thumbsDownRate: number | null;
+    satisfactionScore: number | null;
+    latestRatedAt: string | null;
+  };
   settings: AdminRuntimeSettings;
   overview: {
     totalUsers: number;
@@ -146,6 +159,8 @@ export async function getAdminPortalSnapshotAction(): Promise<AdminPortalSnapsho
   const [
     settings,
     git,
+    benchmarkHistory,
+    replyFeedback,
     users,
     overall,
     errorsCount,
@@ -158,6 +173,8 @@ export async function getAdminPortalSnapshotAction(): Promise<AdminPortalSnapsho
   ] = await Promise.all([
     loadAdminRuntimeSettings(),
     readGitStatusInfo(),
+    loadBenchmarkHistory(),
+    loadReplyFeedbackStats(),
     prisma.user.findMany({
       select: { id: true, email: true, name: true, role: true, createdAt: true },
       orderBy: [{ createdAt: "asc" }],
@@ -248,6 +265,8 @@ export async function getAdminPortalSnapshotAction(): Promise<AdminPortalSnapsho
       appVersion: APP_VERSION,
       git,
     },
+    benchmarkHistory,
+    replyFeedback,
     settings,
     overview: {
       totalUsers: users.length,
@@ -337,6 +356,16 @@ export type AdminModelTestResult =
     }
   | { ok: false; provider: "9router"; model: string; error: string };
 
+export type AdminBenchmarkRunResult =
+  | {
+      ok: true;
+      run: Awaited<ReturnType<typeof runModelBenchmark>>;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
 export type AdminImageTestResult =
   | {
       ok: true;
@@ -395,6 +424,32 @@ export async function testAdminModelAction(input: {
       errorMessage: message,
     });
     return { ok: false, provider: "9router", model, error: message };
+  }
+}
+
+export async function runAdminBenchmarkAction(input: {
+  candidateModel: string;
+  judgeModel: string;
+  url?: string;
+}): Promise<AdminBenchmarkRunResult> {
+  await requireAdmin();
+
+  const candidateModel = normalize9RouterModel(input.candidateModel, DEFAULT_9ROUTER_MODEL);
+  const judgeModel = normalize9RouterModel(input.judgeModel, candidateModel);
+
+  try {
+    const run = await runModelBenchmark({
+      candidateModel,
+      judgeModel,
+      url: input.url,
+    });
+    await saveBenchmarkRun(run);
+    return { ok: true, run };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Benchmark run failed",
+    };
   }
 }
 
