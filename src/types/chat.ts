@@ -46,6 +46,17 @@ export type PendingDocumentImport = {
   transactionItems?: TransactionImportItem[];
 };
 
+export type PendingLedgerEdit = {
+  merchantHint: string | null;
+  dateHint: string | null;
+  newAmount: number | null;
+  newMemo: string | null;
+  newCategory: string | null;
+  newMerchant?: string | null;
+  matchedCount: number;
+  scopeLabel: string;
+};
+
 export type ChatActionSuccess = {
   ok: true;
   assistantMessage: string;
@@ -53,6 +64,8 @@ export type ChatActionSuccess = {
   followUpQuestion?: string | null;
   /** Present when a receipt/paystub was read from an upload and needs explicit ADD vs EDIT before ledger write. */
   pendingDocumentImport?: PendingDocumentImport;
+  /** Present when the assistant staged a bulk ledger edit for explicit confirmation. */
+  pendingLedgerEdit?: PendingLedgerEdit;
 };
 
 export type ChatActionFailure = {

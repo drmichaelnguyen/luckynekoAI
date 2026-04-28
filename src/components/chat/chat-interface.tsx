@@ -39,12 +39,13 @@ import {
 import { BottomNav } from "@/components/chat/bottom-nav";
 import { DailySpendCheckinBanner } from "@/components/chat/daily-spend-checkin-banner";
 import { DocumentImportBar } from "@/components/chat/document-import-bar";
+import { LedgerEditConfirmBar } from "@/components/chat/ledger-edit-confirm-bar";
 import { LuckyNekoAvatar, LuckyNekoMascot } from "@/components/mascot/lucky-neko";
 import { useLocale } from "@/contexts/locale-context";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
-import type { ChatAttachmentMeta, ChatMessage, PendingDocumentImport } from "@/types/chat";
+import type { ChatAttachmentMeta, ChatMessage, PendingDocumentImport, PendingLedgerEdit } from "@/types/chat";
 import {
   computePackTailStart,
   historyWithoutWelcome,
@@ -127,6 +128,7 @@ export function ChatInterface() {
   const [toolsInitialTab, setToolsInitialTab] = useState<AdvancedToolsTabId>("dashboard");
   const [pendingConfirmCount, setPendingConfirmCount] = useState(0);
   const [pendingDocumentImport, setPendingDocumentImport] = useState<PendingDocumentImport | null>(null);
+  const [pendingLedgerEdit, setPendingLedgerEdit] = useState<PendingLedgerEdit | null>(null);
   const [packedFinancialSummary, setPackedFinancialSummary] = useState("");
   const [packedThroughIndex, setPackedThroughIndex] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -459,6 +461,11 @@ export function ChatInterface() {
         } else {
           setPendingDocumentImport(null);
         }
+        if (result.pendingLedgerEdit) {
+          setPendingLedgerEdit(result.pendingLedgerEdit);
+        } else {
+          setPendingLedgerEdit(null);
+        }
         refreshPendingCount();
         return { ok: true, speakText: spoken };
       } catch (e) {
@@ -740,6 +747,17 @@ export function ChatInterface() {
                     refreshPendingCount();
                   }}
                   onDismiss={() => setPendingDocumentImport(null)}
+                />
+              </div>
+            ) : null}
+            {pendingLedgerEdit ? (
+              <div className="mb-2">
+                <LedgerEditConfirmBar
+                  pending={pendingLedgerEdit}
+                  onResolved={(msg) => {
+                    setMessages((prev) => [...prev, { id: randomId(), role: "assistant", content: msg }]);
+                  }}
+                  onDismiss={() => setPendingLedgerEdit(null)}
                 />
               </div>
             ) : null}

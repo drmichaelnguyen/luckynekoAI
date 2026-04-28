@@ -10,6 +10,7 @@ import {
   type RecurrentCadence,
 } from "@/lib/finance/cadence";
 import { ensureFinanceSeed } from "@/lib/finance/seed";
+import { applyLedgerEdit, type LedgerEditRequest } from "@/lib/finance/persist-from-chat";
 import { prisma } from "@/lib/prisma";
 
 export type ConfirmRecurringMode = {
@@ -540,6 +541,17 @@ export async function generateCategoryIconAction(categoryId: string, prompt: str
   }
 }
 
+export async function confirmLedgerEditAction(
+  edit: LedgerEditRequest,
+): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false, error: "Unauthorized" };
+
+  const result = await applyLedgerEdit(prisma, session.user.id, edit);
+  if (!result.saved) return { ok: false, error: result.detail || "Unable to apply the edit." };
+  return { ok: true, message: result.detail || "Bulk edit applied." };
+}
+
 export async function listCategoriesAction(): Promise<{ ok: true; categories: CategoryOption[] } | { ok: false; error: string }> {
   const session = await auth();
   if (!session?.user?.id) return { ok: false, error: "Unauthorized" };
@@ -560,4 +572,3 @@ export async function listCategoriesAction(): Promise<{ ok: true; categories: Ca
     }))
   };
 }
-

@@ -15,7 +15,7 @@ import {
 } from "@/lib/ai/model-router";
 import { recordAiRequestLog, usageFromGeminiResult, type AiUsageMetrics } from "@/lib/ai/telemetry";
 import { loadAdminRuntimeSettings, resolveProviderChoice } from "@/lib/admin-runtime-settings";
-import { persistFreeformLedgerEntry, applyLedgerEdit } from "@/lib/finance/persist-from-chat";
+import { persistFreeformLedgerEntry, applyLedgerEdit, previewLedgerEdit } from "@/lib/finance/persist-from-chat";
 import { financeContextLines } from "@/lib/finance/seed";
 import {
   detectLanguageFromMessage,
@@ -36,7 +36,7 @@ import {
 } from "@/lib/media/user-media-storage";
 import type { ConversationTurnForApi } from "@/lib/chat/conversation-context";
 import { prisma } from "@/lib/prisma";
-import type { PendingDocumentImport } from "@/types/chat";
+import type { PendingDocumentImport, PendingLedgerEdit } from "@/types/chat";
 import type { TransactionImportItem } from "@/types/chat";
 import {
   acknowledgeShareImport,
@@ -112,6 +112,20 @@ const GeminiResponseSchema = z
         newMemo: z.string().nullable().optional(),
         newCategory: z.string().nullable().optional(),
         newMerchant: z.string().nullable().optional(),
+      })
+      .nullable()
+      .optional(),
+    /** Populated when the edit could affect multiple matching rows and needs user confirmation first. */
+    pendingLedgerEdit: z
+      .object({
+        merchantHint: z.string().nullable().optional(),
+        dateHint: z.string().nullable().optional(),
+        newAmount: z.number().nullable().optional(),
+        newMemo: z.string().nullable().optional(),
+        newCategory: z.string().nullable().optional(),
+        newMerchant: z.string().nullable().optional(),
+        matchedCount: z.number().int().min(1),
+        scopeLabel: z.string(),
       })
       .nullable()
       .optional(),
@@ -758,6 +772,7 @@ export async function handleChatInput(formData: FormData) {
     }
 
     let pendingDocumentImport: PendingDocumentImport | undefined;
+    let pendingLedgerEdit: PendingLedgerEdit | undefined;
     let pendingImportJson: string | null = null;
 
     const isFinancialUpload =
@@ -925,14 +940,29 @@ export async function handleChatInput(formData: FormData) {
     ) {
       try {
         const edit = data.ledgerEdit;
-        const result = await applyLedgerEdit(prisma, userId, {
+        const editPayload = {
           merchantHint: edit.merchantHint ?? null,
           dateHint: edit.dateHint ?? null,
           newAmount: typeof edit.newAmount === "number" ? edit.newAmount : null,
           newMemo: edit.newMemo ?? null,
           newCategory: edit.newCategory ?? null,
-        });
-        assistantMessage = `${assistantMessage}\n\n${result.detail}`;
+          newMerchant: typeof edit.newMerchant === "string" ? edit.newMerchant : null,
+        };
+        const preview = await previewLedgerEdit(prisma, userId, editPayload);
+        if (preview.found && preview.matchedCount > 1) {
+          pendingLedgerEdit = {
+            ...editPayload,
+            matchedCount: preview.matchedCount,
+            scopeLabel:
+              editPayload.merchantHint?.trim() ||
+              editPayload.dateHint?.trim() ||
+              "matching transactions",
+          };
+          assistantMessage = `I found ${preview.matchedCount} matching transactions for ${pendingLedgerEdit.scopeLabel}. Please click Proceed in the chat window to apply this bulk edit.`;
+        } else {
+          const result = await applyLedgerEdit(prisma, userId, editPayload);
+          assistantMessage = `${assistantMessage}\n\n${result.detail}`;
+        }
       } catch {
         /* best-effort */
       }
@@ -1027,6 +1057,7 @@ export async function handleChatInput(formData: FormData) {
       structured,
       followUpQuestion,
       ...(pendingDocumentImport ? { pendingDocumentImport } : {}),
+      ...(pendingLedgerEdit ? { pendingLedgerEdit } : {}),
       ...(planCreated ? { planCreated: true as const } : {}),
       ...(pendingRecurrenceApplied ? { pendingRecurrenceApplied } : {}),
     };

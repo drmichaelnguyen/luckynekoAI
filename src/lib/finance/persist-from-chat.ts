@@ -1,4 +1,4 @@
-import type { FlowDirection, PrismaClient, TxRecurrence, TxStatus } from "@prisma/client";
+import type { FlowDirection, Prisma, PrismaClient, TxRecurrence, TxStatus } from "@prisma/client";
 
 import { findOrCreateCategory } from "@/lib/finance/category-resolver";
 
@@ -252,119 +252,196 @@ export async function persistTransactionListLedgerEntries(
   return { saved: true, detail, transactionIds };
 }
 
+export type LedgerEditRequest = {
+  merchantHint: string | null;
+  dateHint: string | null;
+  newAmount: number | null;
+  newMemo: string | null;
+  newCategory: string | null;
+  newMerchant?: string | null;
+};
+
+type LedgerEditTarget = Prisma.TransactionGetPayload<{ include: { category: true } }>;
+
+async function resolveLedgerEditTargets(
+  db: PrismaClient,
+  userId: string,
+  edit: LedgerEditRequest,
+): Promise<{ targets: LedgerEditTarget[]; useBulkMatch: boolean }> {
+  const hasMerchantHint = typeof edit.merchantHint === "string" && edit.merchantHint.trim().length > 0;
+  const hasDateHint = typeof edit.dateHint === "string" && edit.dateHint.trim().length > 0;
+
+  const where: Prisma.TransactionWhereInput = {
+    userId,
+    status: { not: "rejected" },
+  };
+
+  if (hasDateHint) {
+    const parsedDate = new Date(edit.dateHint!.trim());
+    if (!Number.isNaN(parsedDate.getTime())) {
+      const { start, end } = dayBounds(parsedDate);
+      where.occurredAt = { gte: start, lte: end };
+    }
+  }
+
+  const useBulkMatch = hasMerchantHint || hasDateHint;
+  const recentTx = await db.transaction.findMany({
+    where,
+    orderBy: { occurredAt: "desc" },
+    take: useBulkMatch ? undefined : 50,
+    include: { category: true },
+  });
+
+  const merchantHint = edit.merchantHint?.trim().toLowerCase() ?? null;
+  const matchingTx =
+    merchantHint && useBulkMatch
+      ? recentTx.filter(
+          (tx) =>
+            tx.merchant?.toLowerCase().includes(merchantHint) ||
+            tx.memo?.toLowerCase().includes(merchantHint),
+        )
+      : recentTx;
+
+  const targets = useBulkMatch ? matchingTx : [matchingTx[0]].filter((tx): tx is LedgerEditTarget => Boolean(tx));
+  return { targets, useBulkMatch };
+}
+
+export async function previewLedgerEdit(
+  db: PrismaClient,
+  userId: string,
+  edit: LedgerEditRequest,
+): Promise<{ found: boolean; matchedCount: number; transactionId?: string }> {
+  const { targets } = await resolveLedgerEditTargets(db, userId, edit);
+  return {
+    found: targets.length > 0,
+    matchedCount: targets.length,
+    transactionId: targets[0]?.id,
+  };
+}
+
 export async function applyLedgerEdit(
   db: PrismaClient,
   userId: string,
-  edit: {
-    merchantHint: string | null;
-    dateHint: string | null;
-    newAmount: number | null;
-    newMemo: string | null;
-    newCategory: string | null;
-    newMerchant?: string | null;
-  }
+  edit: LedgerEditRequest,
 ): Promise<{ saved: boolean; detail: string; transactionId?: string }> {
-  // Try to find the matching transaction.
-  // We'll look at the last 50 transactions to find a match.
-  const recentTx = await db.transaction.findMany({
-    where: { userId, status: { not: "rejected" } },
-    orderBy: { occurredAt: "desc" },
-    take: 50,
-    include: { category: true }
-  });
+  const { targets, useBulkMatch } = await resolveLedgerEditTargets(db, userId, edit);
 
-  if (recentTx.length === 0) {
-    return { saved: false, detail: "I couldn't find any recent transactions to edit." };
+  if (targets.length === 0) {
+    return { saved: false, detail: "I couldn't find any matching transactions to edit." };
   }
 
-  let targetTx = recentTx[0]; // default to most recent if no hints
-  
-  if (edit.merchantHint) {
-    const hint = edit.merchantHint.toLowerCase();
-    const match = recentTx.find(tx => 
-      tx.merchant?.toLowerCase().includes(hint) || 
-      tx.memo?.toLowerCase().includes(hint)
-    );
-    if (match) targetTx = match;
-  }
+  const updates: Array<{
+    id: string;
+    data: Record<string, unknown>;
+    before: Record<string, unknown>;
+    after: Record<string, unknown>;
+  }> = [];
 
-  // Determine what to update
-  const dataToUpdate: Record<string, any> = {};
-  const before: Record<string, any> = {};
-  const after: Record<string, any> = {};
+  const categoryCache = new Map<string, { id: string; name: string } | null>();
 
-  if (edit.newAmount !== undefined && edit.newAmount !== null) {
-    const amountCents = Math.round(Math.abs(edit.newAmount) * 100);
-    if (amountCents > 0 && targetTx.amountCents !== amountCents) {
-      dataToUpdate.amountCents = amountCents;
-      before.amountCents = targetTx.amountCents;
-      after.amountCents = amountCents;
+  for (const targetTx of targets) {
+    const dataToUpdate: Record<string, unknown> = {};
+    const before: Record<string, unknown> = {};
+    const after: Record<string, unknown> = {};
+
+    if (edit.newAmount !== undefined && edit.newAmount !== null) {
+      const amountCents = Math.round(Math.abs(edit.newAmount) * 100);
+      if (amountCents > 0 && targetTx.amountCents !== amountCents) {
+        dataToUpdate.amountCents = amountCents;
+        before.amountCents = targetTx.amountCents;
+        after.amountCents = amountCents;
+      }
+    }
+
+    if (edit.newMemo !== undefined && edit.newMemo !== null) {
+      if (targetTx.memo !== edit.newMemo) {
+        dataToUpdate.memo = edit.newMemo;
+        before.memo = targetTx.memo;
+        after.memo = edit.newMemo;
+      }
+    }
+
+    if (edit.newCategory !== undefined && edit.newCategory !== null) {
+      const cacheKey = `${targetTx.direction}:${edit.newCategory}`;
+      let cat = categoryCache.get(cacheKey);
+      if (cat === undefined) {
+        cat = await findOrCreateCategory({
+          db,
+          userId,
+          label: edit.newCategory,
+          direction: targetTx.direction,
+          fallbackSlug: targetTx.direction === "in" ? "income" : "other",
+        });
+        categoryCache.set(cacheKey, cat);
+      }
+      if (cat && targetTx.categoryId !== cat.id) {
+        dataToUpdate.categoryId = cat.id;
+        before.categoryId = targetTx.categoryId;
+        after.categoryId = cat.id;
+      }
+    }
+
+    if (edit.newMerchant !== undefined && edit.newMerchant !== null) {
+      if (targetTx.merchant !== edit.newMerchant) {
+        dataToUpdate.merchant = edit.newMerchant;
+        before.merchant = targetTx.merchant;
+        after.merchant = edit.newMerchant;
+      }
+    }
+
+    if (Object.keys(dataToUpdate).length > 0) {
+      updates.push({
+        id: targetTx.id,
+        data: dataToUpdate,
+        before,
+        after,
+      });
     }
   }
 
-  if (edit.newMemo !== undefined && edit.newMemo !== null) {
-    // If the old memo is different, we update it.
-    // If user says "add comment: business trip", the AI might provide the new full memo or just the comment.
-    // We assume the AI provides the complete desired newMemo.
-    if (targetTx.memo !== edit.newMemo) {
-      dataToUpdate.memo = edit.newMemo;
-      before.memo = targetTx.memo;
-      after.memo = edit.newMemo;
-    }
-  }
-
-  if (edit.newCategory !== undefined && edit.newCategory !== null) {
-    const cat = await findOrCreateCategory({
-      db,
-      userId,
-      label: edit.newCategory,
-      direction: targetTx.direction,
-      fallbackSlug: targetTx.direction === "in" ? "income" : "other"
-    });
-    if (cat && targetTx.categoryId !== cat.id) {
-      dataToUpdate.categoryId = cat.id;
-      before.categoryId = targetTx.categoryId;
-      after.categoryId = cat.id;
-    }
-  }
-
-  if (edit.newMerchant !== undefined && edit.newMerchant !== null) {
-    if (targetTx.merchant !== edit.newMerchant) {
-      dataToUpdate.merchant = edit.newMerchant;
-      before.merchant = targetTx.merchant;
-      after.merchant = edit.newMerchant;
-    }
-  }
-
-  if (Object.keys(dataToUpdate).length === 0) {
-    return { 
-      saved: true, 
-      detail: "No changes were needed for this transaction.",
-      transactionId: targetTx.id
+  if (updates.length === 0) {
+    return {
+      saved: true,
+      detail:
+        targets.length === 1
+          ? "No changes were needed for this transaction."
+          : `No changes were needed for ${targets.length} matching transactions.`,
+      transactionId: targets[0].id,
     };
   }
 
-  let editHistory: any[] = [];
-  try {
-    if (targetTx.editHistoryJson) editHistory = JSON.parse(targetTx.editHistoryJson);
-  } catch { /* ignore */ }
-
-  editHistory.push({
-    editedAt: new Date().toISOString(),
-    before,
-    after
-  });
-
-  dataToUpdate.editHistoryJson = JSON.stringify(editHistory);
-
-  await db.transaction.update({
-    where: { id: targetTx.id },
-    data: dataToUpdate
-  });
+  await db.$transaction(
+    updates.map((update) =>
+      db.transaction.update({
+        where: { id: update.id },
+        data: {
+          ...update.data,
+          editHistoryJson: JSON.stringify([
+            ...(() => {
+              try {
+                const existing = targets.find((tx) => tx.id === update.id)?.editHistoryJson;
+                return existing ? JSON.parse(existing) : [];
+              } catch {
+                return [];
+              }
+            })(),
+            {
+              editedAt: new Date().toISOString(),
+              before: update.before,
+              after: update.after,
+            },
+          ]),
+        },
+      }),
+    ),
+  );
 
   return {
     saved: true,
-    detail: "Transaction updated successfully.",
-    transactionId: targetTx.id
+    detail:
+      targets.length === 1
+        ? "Transaction updated successfully."
+        : `Updated ${updates.length} of ${targets.length} matching transactions.`,
+    transactionId: updates[0]?.id ?? targets[0].id,
   };
 }
