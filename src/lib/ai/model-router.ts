@@ -1,7 +1,7 @@
 import { DEFAULT_9ROUTER_MODEL, LARGE_9ROUTER_MODEL } from "@/lib/ai/9router";
 
 export type AiProvider = "gemini" | "9router";
-export type AiRouterModel = typeof DEFAULT_9ROUTER_MODEL | typeof LARGE_9ROUTER_MODEL;
+export type AiRouterModel = string;
 
 export function orderedProviders(input: {
   preferred: AiProvider;
@@ -39,9 +39,14 @@ export function chooseChatRouterModel(input: {
   message: string;
   hasConversationContext: boolean;
   nineRouterAvailable: boolean;
+  miniModel?: string;
+  largeModel?: string;
 }): AiRouterModel {
-  if (!input.nineRouterAvailable) return DEFAULT_9ROUTER_MODEL;
-  if (input.hasAttachments) return DEFAULT_9ROUTER_MODEL;
+  const miniModel = input.miniModel?.trim() || DEFAULT_9ROUTER_MODEL;
+  const largeModel = input.largeModel?.trim() || LARGE_9ROUTER_MODEL;
+
+  if (!input.nineRouterAvailable) return miniModel;
+  if (input.hasAttachments) return miniModel;
 
   const text = input.message.toLowerCase();
   const needsReasoning =
@@ -51,11 +56,11 @@ export function chooseChatRouterModel(input: {
       text,
     );
 
-  return needsReasoning ? LARGE_9ROUTER_MODEL : DEFAULT_9ROUTER_MODEL;
+  return needsReasoning ? largeModel : miniModel;
 }
 
-export function chooseStructuredTextRouterModel(): AiRouterModel {
-  return DEFAULT_9ROUTER_MODEL;
+export function chooseStructuredTextRouterModel(input?: { miniModel?: string }): AiRouterModel {
+  return input?.miniModel?.trim() || DEFAULT_9ROUTER_MODEL;
 }
 
 export function parseModelJson(rawText: string): unknown {

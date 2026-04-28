@@ -15,7 +15,7 @@ import {
 } from "@/lib/ai/model-router";
 import { recordAiRequestLog, usageFromGeminiResult, type AiUsageMetrics } from "@/lib/ai/telemetry";
 import { loadAdminRuntimeSettings, resolveProviderChoice } from "@/lib/admin-runtime-settings";
-import { persistFreeformLedgerEntry } from "@/lib/finance/persist-from-chat";
+import { persistFreeformLedgerEntry, applyLedgerEdit } from "@/lib/finance/persist-from-chat";
 import { financeContextLines } from "@/lib/finance/seed";
 import {
   detectLanguageFromMessage,
@@ -53,6 +53,7 @@ const GeminiResponseSchema = z
       "payroll_document",
       "transaction_list_capture",
       "unknown_document",
+      "ledger_edit",
     ]),
     transaction: z.record(z.string(), z.unknown()).nullable().optional(),
     transactionList: z.array(z.record(z.string(), z.unknown())).nullable().optional(),
@@ -102,6 +103,17 @@ const GeminiResponseSchema = z
       })
       .nullable()
       .optional(),
+    /** Populated when the user explicitly asks to edit, modify, or add a comment to a past transaction. */
+    ledgerEdit: z
+      .object({
+        merchantHint: z.string().nullable().optional(),
+        dateHint: z.string().nullable().optional(),
+        newAmount: z.number().nullable().optional(),
+        newMemo: z.string().nullable().optional(),
+        newCategory: z.string().nullable().optional(),
+      })
+      .nullable()
+      .optional(),
   })
   .passthrough();
 
@@ -137,12 +149,12 @@ export async function acknowledgeShareImportAction(id: string): Promise<void> {
   acknowledgeShareImport(id.trim());
 }
 
-const SYSTEM_INSTRUCTION = `You are NekoZeni, a friendly lucky-cat-themed finance assistant for people in Canada and Vietnam.
+const SYSTEM_INSTRUCTION = `You are NekoZeni, a friendly lucky-cat-themed finance assistant for people in Canada and Vietnam. You are fully bilingual and speak fluidly in both English and Vietnamese. Reply naturally in the language the user speaks to you (or bilingual if requested).
 You MUST respond with JSON only (no markdown fences).
 
 Your JSON MUST match this shape (optional keys only when relevant):
 {
-  "documentKind": "freeform_transaction" | "receipt" | "payroll_document" | "transaction_list_capture" | "unknown_document",
+  "documentKind": "freeform_transaction" | "receipt" | "payroll_document" | "transaction_list_capture" | "unknown_document" | "ledger_edit",
   "transaction": null | object,
   "transactionList": null | object[],
   "receipt": null | object,
@@ -153,12 +165,14 @@ Your JSON MUST match this shape (optional keys only when relevant):
   "awaitingLedgerDecision": boolean,
   "receiptSplit": null | [{ "description": string, "category": string, "amount": number, "currency": string, "direction": "in"|"out" }],
   "planSuggestion": null | { "title": string, "description": string | null, "amountCents": number | null, "currency": string, "period": "none" | "monthly" | "yearly" },
-  "pendingRecurrenceUpdate": null | { "merchantHint": string | null, "cadenceText": string, "nextReminderAt": string | null }
+  "pendingRecurrenceUpdate": null | { "merchantHint": string | null, "cadenceText": string, "nextReminderAt": string | null },
+  "ledgerEdit": null | { "merchantHint": string | null, "dateHint": string | null, "newAmount": number | null, "newMemo": string | null, "newCategory": string | null }
 }
 
 Rules:
 - The user message may include USER PREFERENCES (how to address them in chat) and FINANCIAL PLANS (spending budgets and savings goals). Follow those when giving advice; do not ignore a stated monthly cap or savings target without asking first.
-- Choose exactly one primary extraction target: populate ONLY ONE of transaction/transactionList/receipt/paystub; set the others to null.
+- Choose exactly one primary extraction target: populate ONLY ONE of transaction/transactionList/receipt/paystub/ledgerEdit; set the others to null.
+- If the user explicitly asks to edit, update, or add a comment/note to a PAST or EXISTING transaction (e.g., "add a note to my Uber ride", "change the amount of my Tim Hortons to $5"), use documentKind "ledger_edit" and populate ledgerEdit with merchantHint, dateHint (if given), newAmount, newMemo, newCategory.
 - If the user only typed text describing a purchase, use documentKind "freeform_transaction" and populate transaction.
 - If the uploaded file is a clear retail or service purchase receipt or bill (you can read totals and context), use documentKind "receipt" and populate receipt with structured expense data suitable for database insertion.
 - If the uploaded file is a payroll or payslip document from Canada or Vietnam, use documentKind "payroll_document" and populate paystub with payroll fields suitable for database insertion.
@@ -583,6 +597,8 @@ export async function handleChatInput(formData: FormData) {
       message,
       hasConversationContext: Boolean(packedFinancialSummary || recentPriorTurns.length > 0),
       nineRouterAvailable: has9RouterConfig(),
+      miniModel: adminSettings.routing.nineRouterMiniModel,
+      largeModel: adminSettings.routing.nineRouterModel,
     });
 
     for (const provider of providerOrder) {
@@ -601,7 +617,7 @@ export async function handleChatInput(formData: FormData) {
             userPrompt: prompt,
             temperature: 0.15,
             attachments: preparedAttachments,
-            model: adminSettings.routing.nineRouterModel || routerModel,
+            model: routerModel,
             url: adminSettings.routing.nineRouterUrl,
           });
           text = rawText.text;
@@ -625,7 +641,7 @@ export async function handleChatInput(formData: FormData) {
           userId,
           feature: "chat_response",
           provider,
-          model: provider === "gemini" ? modelName : adminSettings.routing.nineRouterModel || routerModel,
+          model: provider === "gemini" ? modelName : routerModel,
           success: false,
           latencyMs: Date.now() - startedAt,
           errorMessage: e instanceof Error ? e.message : "Unknown model error.",
@@ -863,6 +879,26 @@ export async function handleChatInput(formData: FormData) {
         }
       } catch {
         /* ledger write is best-effort; chat reply still returns */
+      }
+    }
+
+    if (
+      data.documentKind === "ledger_edit" &&
+      data.ledgerEdit &&
+      typeof data.ledgerEdit === "object"
+    ) {
+      try {
+        const edit = data.ledgerEdit;
+        const result = await applyLedgerEdit(prisma, userId, {
+          merchantHint: edit.merchantHint ?? null,
+          dateHint: edit.dateHint ?? null,
+          newAmount: typeof edit.newAmount === "number" ? edit.newAmount : null,
+          newMemo: edit.newMemo ?? null,
+          newCategory: edit.newCategory ?? null,
+        });
+        assistantMessage = `${assistantMessage}\n\n${result.detail}`;
+      } catch {
+        /* best-effort */
       }
     }
 

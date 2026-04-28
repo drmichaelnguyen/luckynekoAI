@@ -22,6 +22,16 @@ This app is set up to run locally on port `3200` and be exposed through the exis
    GOOGLE_GENERATIVE_AI_API_KEY=your_key_here
    ```
 
+   If you are using 9router for fallback or structured-model routing, you can also set:
+
+   ```env
+   NINE_ROUTER_API_KEY=your_key_here
+   NINE_ROUTER_MINI_MODEL=mini_models
+   NINE_ROUTER_MODEL=gpt-5
+   ```
+
+   The admin portal can override both 9router model fields at runtime. The mini model is used for easier chat queries and structured cleanup flows by default.
+
 3. Build the app:
 
    ```bash

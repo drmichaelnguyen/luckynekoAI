@@ -188,7 +188,10 @@ Rules:
       for (const provider of providerOrder) {
         const startedAt = Date.now();
         try {
-          const selectedModel = provider === "gemini" ? modelName : adminSettings.routing.nineRouterModel || chooseStructuredTextRouterModel();
+          const selectedModel =
+            provider === "gemini"
+              ? modelName
+              : chooseStructuredTextRouterModel({ miniModel: adminSettings.routing.nineRouterMiniModel });
           let text = "";
           let usage: AiUsageMetrics;
           if (provider === "gemini") {
@@ -196,13 +199,13 @@ Rules:
             text = raw.response.text();
             usage = usageFromGeminiResult(raw);
           } else {
-          const raw = await call9RouterChatCompletion({
-            systemInstruction,
-            userPrompt,
-            temperature: 0.1,
-            model: adminSettings.routing.nineRouterModel || chooseStructuredTextRouterModel(),
-            url: adminSettings.routing.nineRouterUrl,
-          });
+            const raw = await call9RouterChatCompletion({
+              systemInstruction,
+              userPrompt,
+              temperature: 0.1,
+              model: chooseStructuredTextRouterModel({ miniModel: adminSettings.routing.nineRouterMiniModel }),
+              url: adminSettings.routing.nineRouterUrl,
+            });
             text = raw.text;
             usage = raw.usage;
           }
@@ -227,7 +230,10 @@ Rules:
             userId: session.user.id,
             feature: "csv_import_map",
             provider,
-            model: provider === "gemini" ? modelName : adminSettings.routing.nineRouterModel || chooseStructuredTextRouterModel(),
+            model:
+              provider === "gemini"
+                ? modelName
+                : chooseStructuredTextRouterModel({ miniModel: adminSettings.routing.nineRouterMiniModel }),
             success: false,
             latencyMs: Date.now() - startedAt,
             errorMessage: e instanceof Error ? e.message : "Unknown model error.",
@@ -360,7 +366,8 @@ Rules:
               provider: row.modelProvider,
               providerOrder: row.modelProviderOrder,
               geminiModel: modelName,
-              nineRouterModel: chooseStructuredTextRouterModel(),
+              nineRouterMiniModel: chooseStructuredTextRouterModel({ miniModel: adminSettings.routing.nineRouterMiniModel }),
+              nineRouterModel: adminSettings.routing.nineRouterModel,
             },
             mapped: {
               rowIndex: row.rowIndex,

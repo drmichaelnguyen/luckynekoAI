@@ -21,7 +21,7 @@ type ChatCompletionResponse = {
   };
 };
 
-export const DEFAULT_9ROUTER_MODEL = "gpt-5";
+export const DEFAULT_9ROUTER_MODEL = "mini_models";
 export const LARGE_9ROUTER_MODEL = "gpt-5";
 
 function get9RouterConfig() {

@@ -391,7 +391,18 @@ export function AdminPortal() {
                     />
                   </label>
                   <label className="space-y-1 text-sm">
-                    <span className="text-xs uppercase tracking-wide text-muted-foreground">9router model</span>
+                    <span className="text-xs uppercase tracking-wide text-muted-foreground">9router mini model</span>
+                    <Input
+                      type="text"
+                      value={settings?.routing.nineRouterMiniModel ?? ""}
+                      onChange={(e) => updateRouting("nineRouterMiniModel", e.target.value)}
+                      disabled={!settings || isPending}
+                    />
+                  </label>
+                </div>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="space-y-1 text-sm">
+                    <span className="text-xs uppercase tracking-wide text-muted-foreground">9router large model</span>
                     <Input
                       type="text"
                       value={settings?.routing.nineRouterModel ?? ""}
@@ -399,6 +410,9 @@ export function AdminPortal() {
                       disabled={!settings || isPending}
                     />
                   </label>
+                  <div className="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                    Easy queries use the mini model by default. Harder chat queries and explicit overrides use the large model.
+                  </div>
                 </div>
                 <label className="block space-y-1 text-sm">
                   <span className="text-xs uppercase tracking-wide text-muted-foreground">9router URL</span>

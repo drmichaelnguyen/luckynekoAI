@@ -112,7 +112,10 @@ export async function packFinancialConversationAction(input: {
       try {
         let text = "";
         let usage: AiUsageMetrics;
-        const selectedModel = provider === "gemini" ? modelName : adminSettings.routing.nineRouterModel || chooseStructuredTextRouterModel();
+        const selectedModel =
+          provider === "gemini"
+            ? modelName
+            : chooseStructuredTextRouterModel({ miniModel: adminSettings.routing.nineRouterMiniModel });
         if (provider === "gemini") {
           const rawText = await model!.generateContent(userPrompt);
           text = rawText.response.text();
@@ -122,7 +125,7 @@ export async function packFinancialConversationAction(input: {
             systemInstruction: PACK_SYSTEM,
             userPrompt,
             temperature: 0.1,
-            model: adminSettings.routing.nineRouterModel || chooseStructuredTextRouterModel(),
+            model: chooseStructuredTextRouterModel({ miniModel: adminSettings.routing.nineRouterMiniModel }),
             url: adminSettings.routing.nineRouterUrl,
           });
           text = rawText.text;
@@ -146,7 +149,10 @@ export async function packFinancialConversationAction(input: {
           userId: session.user.id,
           feature: "chat_context_pack",
           provider,
-          model: provider === "gemini" ? modelName : adminSettings.routing.nineRouterModel || chooseStructuredTextRouterModel(),
+          model:
+            provider === "gemini"
+              ? modelName
+              : chooseStructuredTextRouterModel({ miniModel: adminSettings.routing.nineRouterMiniModel }),
           success: false,
           latencyMs: Date.now() - startedAt,
           errorMessage: e instanceof Error ? e.message : "Unknown model error.",

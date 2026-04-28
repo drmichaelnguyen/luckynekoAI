@@ -96,7 +96,10 @@ Return only valid JSON with a single top-level key "receipt" or "paystub" matchi
     for (const provider of providerOrder) {
       const startedAt = Date.now();
       try {
-        const selectedModel = provider === "gemini" ? modelName : adminSettings.routing.nineRouterModel || chooseStructuredTextRouterModel();
+        const selectedModel =
+          provider === "gemini"
+            ? modelName
+            : chooseStructuredTextRouterModel({ miniModel: adminSettings.routing.nineRouterMiniModel });
         let text = "";
         let usage: AiUsageMetrics;
         if (provider === "gemini") {
@@ -108,7 +111,7 @@ Return only valid JSON with a single top-level key "receipt" or "paystub" matchi
             systemInstruction,
             userPrompt: prompt,
             temperature: 0.1,
-            model: adminSettings.routing.nineRouterModel || chooseStructuredTextRouterModel(),
+            model: chooseStructuredTextRouterModel({ miniModel: adminSettings.routing.nineRouterMiniModel }),
             url: adminSettings.routing.nineRouterUrl,
           });
           text = raw.text;
@@ -132,7 +135,10 @@ Return only valid JSON with a single top-level key "receipt" or "paystub" matchi
           userId: input.userId,
           feature: "document_import_merge",
           provider,
-          model: provider === "gemini" ? modelName : adminSettings.routing.nineRouterModel || chooseStructuredTextRouterModel(),
+          model:
+            provider === "gemini"
+              ? modelName
+              : chooseStructuredTextRouterModel({ miniModel: adminSettings.routing.nineRouterMiniModel }),
           success: false,
           latencyMs: Date.now() - startedAt,
           errorMessage: error instanceof Error ? error.message : "Unknown model error.",
