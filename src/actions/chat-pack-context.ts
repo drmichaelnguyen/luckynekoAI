@@ -5,7 +5,14 @@ import { z } from "zod";
 
 import { auth } from "@/auth";
 import { call9RouterChatCompletion, has9RouterConfig } from "@/lib/ai/9router";
-import { chooseStructuredTextPrimary, orderedProviders, parseModelJson } from "@/lib/ai/model-router";
+import {
+  chooseStructuredTextPrimary,
+  chooseStructuredTextRouterModel,
+  orderedProviders,
+  parseModelJson,
+} from "@/lib/ai/model-router";
+import { recordAiRequestLog, usageFromGeminiResult, type AiUsageMetrics } from "@/lib/ai/telemetry";
+import { loadAdminRuntimeSettings, resolveProviderChoice } from "@/lib/admin-runtime-settings";
 import type { ConversationTurnForApi } from "@/lib/chat/conversation-context";
 
 const PackResponseSchema = z.object({
@@ -66,7 +73,8 @@ export async function packFinancialConversationAction(input: {
     };
   }
 
-  const modelName = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
+  const adminSettings = await loadAdminRuntimeSettings();
+  const modelName = adminSettings.routing.geminiModel;
 
   const model = apiKey
     ? new GoogleGenerativeAI(apiKey).getGenerativeModel({
@@ -91,25 +99,58 @@ export async function packFinancialConversationAction(input: {
     let lastModelError: unknown = null;
 
     const providerOrder = orderedProviders({
-      preferred: chooseStructuredTextPrimary({ nineRouterAvailable: has9RouterConfig() }),
+      preferred: resolveProviderChoice(
+        adminSettings.routing.structuredPrimaryProvider,
+        chooseStructuredTextPrimary({ nineRouterAvailable: has9RouterConfig() }),
+      ),
       geminiAvailable: Boolean(model),
       nineRouterAvailable: has9RouterConfig(),
     });
 
     for (const provider of providerOrder) {
+      const startedAt = Date.now();
       try {
-        const rawText =
-          provider === "gemini"
-            ? (await model!.generateContent(userPrompt)).response.text()
-            : await call9RouterChatCompletion({
-                systemInstruction: PACK_SYSTEM,
-                userPrompt,
-                temperature: 0.1,
-              });
-        parsed = PackResponseSchema.safeParse(parseModelJson(rawText));
+        let text = "";
+        let usage: AiUsageMetrics;
+        const selectedModel = provider === "gemini" ? modelName : adminSettings.routing.nineRouterModel || chooseStructuredTextRouterModel();
+        if (provider === "gemini") {
+          const rawText = await model!.generateContent(userPrompt);
+          text = rawText.response.text();
+          usage = usageFromGeminiResult(rawText);
+        } else {
+          const rawText = await call9RouterChatCompletion({
+            systemInstruction: PACK_SYSTEM,
+            userPrompt,
+            temperature: 0.1,
+            model: adminSettings.routing.nineRouterModel || chooseStructuredTextRouterModel(),
+            url: adminSettings.routing.nineRouterUrl,
+          });
+          text = rawText.text;
+          usage = rawText.usage;
+        }
+        parsed = PackResponseSchema.safeParse(parseModelJson(text));
+        await recordAiRequestLog({
+          userId: session.user.id,
+          feature: "chat_context_pack",
+          provider,
+          model: selectedModel,
+          success: parsed.success,
+          usage,
+          latencyMs: Date.now() - startedAt,
+          errorMessage: parsed.success ? null : "Model returned invalid JSON for packed financial summary.",
+        });
         if (parsed.success) break;
       } catch (e) {
         lastModelError = e;
+        await recordAiRequestLog({
+          userId: session.user.id,
+          feature: "chat_context_pack",
+          provider,
+          model: provider === "gemini" ? modelName : adminSettings.routing.nineRouterModel || chooseStructuredTextRouterModel(),
+          success: false,
+          latencyMs: Date.now() - startedAt,
+          errorMessage: e instanceof Error ? e.message : "Unknown model error.",
+        });
       }
     }
 

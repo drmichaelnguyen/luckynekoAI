@@ -14,7 +14,15 @@ type ChatCompletionResponse = {
     };
   }>;
   error?: { message?: string };
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
 };
+
+export const DEFAULT_9ROUTER_MODEL = "gpt-5";
+export const LARGE_9ROUTER_MODEL = "gpt-5";
 
 function get9RouterConfig() {
   const apiKey = process.env.NINE_ROUTER_API_KEY?.trim();
@@ -25,7 +33,7 @@ function get9RouterConfig() {
     url:
       process.env.NINE_ROUTER_URL?.trim() ||
       "https://9router.k-aithelittlelion.com/v1/chat/completions",
-    model: process.env.NINE_ROUTER_MODEL?.trim() || "codex-gemini",
+    model: process.env.NINE_ROUTER_MODEL?.trim() || DEFAULT_9ROUTER_MODEL,
   };
 }
 
@@ -49,7 +57,12 @@ export async function call9RouterChatCompletion(input: {
   userPrompt: string;
   temperature?: number;
   attachments?: ChatAttachment[];
-}): Promise<string> {
+  model?: string;
+  url?: string;
+}): Promise<{
+  text: string;
+  usage: { promptTokens: number | null; completionTokens: number | null; totalTokens: number | null };
+}> {
   const config = get9RouterConfig();
   if (!config) {
     throw new Error("Server is missing NINE_ROUTER_API_KEY.");
@@ -79,14 +92,15 @@ export async function call9RouterChatCompletion(input: {
       ]
     : input.userPrompt;
 
-  const response = await fetch(config.url, {
+  const requestUrl = input.url?.trim() || config.url;
+  const response = await fetch(requestUrl, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${config.apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: config.model,
+      model: input.model?.trim() || config.model,
       messages: [
         { role: "system", content: input.systemInstruction },
         { role: "user", content: userContent },
@@ -102,5 +116,12 @@ export async function call9RouterChatCompletion(input: {
 
   const text = contentToText(body?.choices?.[0]?.message?.content);
   if (!text) throw new Error("9router returned an empty response.");
-  return text;
+  return {
+    text,
+    usage: {
+      promptTokens: typeof body?.usage?.prompt_tokens === "number" ? body.usage.prompt_tokens : null,
+      completionTokens: typeof body?.usage?.completion_tokens === "number" ? body.usage.completion_tokens : null,
+      totalTokens: typeof body?.usage?.total_tokens === "number" ? body.usage.total_tokens : null,
+    },
+  };
 }

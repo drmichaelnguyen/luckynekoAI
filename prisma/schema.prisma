@@ -35,6 +35,35 @@ model User {
   storedMedia      StoredMedia[]
   financialPlans   FinancialPlan[]
   passwordResetTokens PasswordResetToken[]
+  aiRequestLogs    AiRequestLog[]
+}
+
+model AiRequestLog {
+  id               String   @id @default(cuid())
+  userId           String?
+  user             User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  feature          String
+  provider         String
+  model            String
+  success          Boolean
+  promptTokens     Int?
+  completionTokens Int?
+  totalTokens      Int?
+  latencyMs        Int?
+  errorMessage     String?
+  createdAt        DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([userId, createdAt])
+  @@index([provider, model, createdAt])
+  @@index([success, createdAt])
+}
+
+model AdminSetting {
+  key       String   @id
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model PasswordResetToken {

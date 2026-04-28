@@ -2,6 +2,7 @@ import type { PlanKind, PlanPeriod, PrismaClient, WalletKind } from "@prisma/cli
 
 import { buildExchangeRateContext } from "@/lib/finance/exchange-rates";
 import { slugify } from "@/lib/finance/slug";
+import { loadAdminRuntimeSettings } from "@/lib/admin-runtime-settings";
 import { findUserNameAndNicknameById } from "@/lib/prisma/user-select-compat";
 import { loadSpendingPatterns, buildSpendingPatternLines } from "@/lib/learning/spending-patterns";
 import { loadCorrectionExamples, buildCorrectionExamplesLines } from "@/lib/learning/correction-examples";
@@ -171,7 +172,19 @@ export async function ensureFinanceSeed(db: PrismaClient, userId: string): Promi
 export async function financeContextLines(db: PrismaClient, userId: string): Promise<string> {
   try {
     await ensureFinanceSeed(db, userId);
-    const [user, wallets, categories, plans, balanceGroups, userPrefs, spendingCtx, correctionExamples, chatPrefs, pendingConfirms] = await Promise.all([
+    const settings = await loadAdminRuntimeSettings();
+    const [
+      user,
+      wallets,
+      categories,
+      plans,
+      balanceGroups,
+      userPrefs,
+      spendingCtx,
+      correctionExamples,
+      chatPrefs,
+      pendingConfirms,
+    ] = await Promise.all([
       findUserNameAndNicknameById(db, userId),
       db.wallet.findMany({
         where: { userId },
@@ -190,9 +203,12 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
         _sum: { amountCents: true },
       }).catch(() => [] as { walletId: string; direction: string; _sum: { amountCents: number | null } }[]),
       db.user.findUnique({ where: { id: userId }, select: { preferredCurrency: true } }),
-      loadSpendingPatterns(db, userId),
-      loadCorrectionExamples(db, userId, 3),
-      loadChatPreferences(db, userId),
+      loadSpendingPatterns(db, userId, {
+        enabled: settings.learning.enableMerchantLearning,
+        minMerchantFrequency: settings.learning.merchantLearningMinFrequency,
+      }),
+      loadCorrectionExamples(db, userId, settings.learning.enableCorrectionLearning ? 3 : 0),
+      settings.learning.enableChatPreferenceLearning ? loadChatPreferences(db, userId) : Promise.resolve(null),
       db.transaction.findMany({
         where: { userId, status: "pending_user" },
         orderBy: { createdAt: "desc" },
@@ -229,17 +245,17 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
     ];
 
     // Add chat preferences if detected
-    if (chatPrefs?.language === "vi") {
+    if (settings.learning.enableChatPreferenceLearning && chatPrefs?.language === "vi") {
       prefLines.push(`- Language: Vietnamese — respond in Vietnamese unless user writes English first.`);
-    } else if (chatPrefs?.language === "en") {
+    } else if (settings.learning.enableChatPreferenceLearning && chatPrefs?.language === "en") {
       prefLines.push(`- Language: English — respond in English.`);
     }
-    if (chatPrefs?.verbosity === "concise") {
+    if (settings.learning.enableChatPreferenceLearning && chatPrefs?.verbosity === "concise") {
       prefLines.push(`- Response style: concise — keep replies short and direct.`);
-    } else if (chatPrefs?.verbosity === "detailed") {
+    } else if (settings.learning.enableChatPreferenceLearning && chatPrefs?.verbosity === "detailed") {
       prefLines.push(`- Response style: detailed — explain thoroughly.`);
     }
-    if ((chatPrefs?.explicitInstructions?.length ?? 0) > 0) {
+    if (settings.learning.enableChatPreferenceLearning && (chatPrefs?.explicitInstructions?.length ?? 0) > 0) {
       prefLines.push(`- User-stated preferences:`);
       for (const inst of chatPrefs!.explicitInstructions) {
         prefLines.push(`  - "${inst}"`);
@@ -271,8 +287,8 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
       return `- ${label} (${c.kind}, slug:${c.slug})`;
     });
 
-    const spendingLines = buildSpendingPatternLines(spendingCtx);
-    const correctionLines = buildCorrectionExamplesLines(correctionExamples);
+    const spendingLines = settings.learning.enableMerchantLearning ? buildSpendingPatternLines(spendingCtx) : [];
+    const correctionLines = settings.learning.enableCorrectionLearning ? buildCorrectionExamplesLines(correctionExamples) : [];
 
     const pendingLines =
       pendingConfirms.length === 0

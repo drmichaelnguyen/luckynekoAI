@@ -5,7 +5,14 @@ import { z } from "zod";
 
 import { auth } from "@/auth";
 import { call9RouterChatCompletion, has9RouterConfig } from "@/lib/ai/9router";
-import { chooseStructuredTextPrimary, orderedProviders, parseModelJson } from "@/lib/ai/model-router";
+import {
+  chooseStructuredTextPrimary,
+  chooseStructuredTextRouterModel,
+  orderedProviders,
+  parseModelJson,
+} from "@/lib/ai/model-router";
+import { recordAiRequestLog, usageFromGeminiResult, type AiUsageMetrics } from "@/lib/ai/telemetry";
+import { loadAdminRuntimeSettings, resolveProviderChoice } from "@/lib/admin-runtime-settings";
 import { parseCsvTable } from "@/lib/csv-parse";
 import { findOrCreateCategory } from "@/lib/finance/category-resolver";
 import { financeContextLines, ensureFinanceSeed } from "@/lib/finance/seed";
@@ -101,8 +108,9 @@ export async function importCsvWithLlmAction(formData: FormData): Promise<CsvImp
 
   await ensureFinanceSeed(prisma, session.user.id);
   const ctx = await financeContextLines(prisma, session.user.id);
+  const adminSettings = await loadAdminRuntimeSettings();
 
-  const modelName = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
+  const modelName = adminSettings.routing.geminiModel;
   const baseSystemInstruction = `You map messy export CSV rows into structured ledger lines for NekoZeni.
 ${ctx}
 
@@ -145,7 +153,10 @@ Rules:
 
   try {
     const providerOrder = orderedProviders({
-      preferred: chooseStructuredTextPrimary({ nineRouterAvailable: has9RouterConfig() }),
+      preferred: resolveProviderChoice(
+        adminSettings.routing.structuredPrimaryProvider,
+        chooseStructuredTextPrimary({ nineRouterAvailable: has9RouterConfig() }),
+      ),
       geminiAvailable: Boolean(model),
       nineRouterAvailable: has9RouterConfig(),
     });
@@ -175,22 +186,52 @@ Rules:
       let usedProvider: (typeof providerOrder)[number] | null = null;
 
       for (const provider of providerOrder) {
+        const startedAt = Date.now();
         try {
-          const raw =
-            provider === "gemini"
-              ? (await model!.generateContent([{ text: userPrompt }])).response.text()
-              : await call9RouterChatCompletion({
-                  systemInstruction,
-                  userPrompt,
-                  temperature: 0.1,
-                });
-          parsed = CsvMapResponseSchema.safeParse(parseModelJson(raw));
+          const selectedModel = provider === "gemini" ? modelName : adminSettings.routing.nineRouterModel || chooseStructuredTextRouterModel();
+          let text = "";
+          let usage: AiUsageMetrics;
+          if (provider === "gemini") {
+            const raw = await model!.generateContent([{ text: userPrompt }]);
+            text = raw.response.text();
+            usage = usageFromGeminiResult(raw);
+          } else {
+          const raw = await call9RouterChatCompletion({
+            systemInstruction,
+            userPrompt,
+            temperature: 0.1,
+            model: adminSettings.routing.nineRouterModel || chooseStructuredTextRouterModel(),
+            url: adminSettings.routing.nineRouterUrl,
+          });
+            text = raw.text;
+            usage = raw.usage;
+          }
+          parsed = CsvMapResponseSchema.safeParse(parseModelJson(text));
+          await recordAiRequestLog({
+            userId: session.user.id,
+            feature: "csv_import_map",
+            provider,
+            model: selectedModel,
+            success: parsed.success,
+            usage,
+            latencyMs: Date.now() - startedAt,
+            errorMessage: parsed.success ? null : `Model returned invalid JSON for rows ${chunkStart}-${chunkEnd}.`,
+          });
           if (parsed.success) {
             usedProvider = provider;
             break;
           }
         } catch (e) {
           lastModelError = e;
+          await recordAiRequestLog({
+            userId: session.user.id,
+            feature: "csv_import_map",
+            provider,
+            model: provider === "gemini" ? modelName : adminSettings.routing.nineRouterModel || chooseStructuredTextRouterModel(),
+            success: false,
+            latencyMs: Date.now() - startedAt,
+            errorMessage: e instanceof Error ? e.message : "Unknown model error.",
+          });
         }
       }
 
@@ -319,7 +360,7 @@ Rules:
               provider: row.modelProvider,
               providerOrder: row.modelProviderOrder,
               geminiModel: modelName,
-              nineRouterModel: process.env.NINE_ROUTER_MODEL?.trim() || "codex-gemini",
+              nineRouterModel: chooseStructuredTextRouterModel(),
             },
             mapped: {
               rowIndex: row.rowIndex,

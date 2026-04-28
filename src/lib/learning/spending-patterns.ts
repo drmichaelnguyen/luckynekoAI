@@ -13,8 +13,16 @@ export type SpendingPatternContext = {
   topCategoryNames: string[];
 };
 
-export async function loadSpendingPatterns(db: PrismaClient, userId: string): Promise<SpendingPatternContext> {
+export async function loadSpendingPatterns(
+  db: PrismaClient,
+  userId: string,
+  options?: { enabled?: boolean; minMerchantFrequency?: number },
+): Promise<SpendingPatternContext> {
   try {
+    if (options?.enabled === false) {
+      return { merchantHints: [], topCategoryNames: [] };
+    }
+
     // Load last 200 transactions with merchant + category
     const txRows = await db.transaction.findMany({
       where: {
@@ -64,7 +72,7 @@ export async function loadSpendingPatterns(db: PrismaClient, userId: string): Pr
           categoryName: modalCategory[0],
           categorySlug: data.categorySlug,
           frequency: data.count,
-          isRecurring: data.count >= 3,
+          isRecurring: data.count >= (options?.minMerchantFrequency ?? 3),
         };
       })
       .sort((a, b) => b.frequency - a.frequency)
@@ -120,12 +128,15 @@ export function buildSpendingPatternLines(ctx: SpendingPatternContext): string[]
 export function applyMerchantCategoryRule(
   structured: Record<string, unknown>,
   merchantHints: MerchantHint[],
+  options?: { minMerchantFrequency?: number },
 ): Record<string, unknown> {
   const merchant = structured.merchant;
   if (!merchant || typeof merchant !== "string") return structured;
 
   const merchantLower = merchant.toLowerCase().trim();
-  const hint = merchantHints.find((h) => h.frequency >= 2 && h.merchant.toLowerCase() === merchantLower);
+  const hint = merchantHints.find(
+    (h) => h.frequency >= (options?.minMerchantFrequency ?? 3) && h.merchant.toLowerCase() === merchantLower,
+  );
 
   if (hint) {
     return {

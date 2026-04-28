@@ -2,6 +2,7 @@ import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { compare } from "bcryptjs";
 
+import { resolveUserRole } from "@/lib/admin-access";
 import { prisma } from "@/lib/prisma";
 import { findUserForCredentialsByEmail } from "@/lib/prisma/user-select-compat";
 
@@ -35,12 +36,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         const valid = await compare(password, user.passwordHash);
         if (!valid) return null;
 
+        const role = resolveUserRole({ email: user.email, role: user.role });
+
         return {
           id: user.id,
           email: user.email,
           name: user.name ?? user.email.split("@")[0] ?? "Friend",
           nickname: user.nickname,
-          role: user.role,
+          role,
           image: user.avatarRelativePath ? "/api/user/avatar" : undefined,
         };
       },
@@ -55,7 +58,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         const u = user as { nickname?: string | null; image?: string | null; role?: string | null };
         token.nickname = u.nickname ?? null;
         token.picture = u.image ?? undefined;
-        token.role = u.role ?? "user";
+        token.role = resolveUserRole({ email: user.email, role: u.role });
       }
       if (trigger === "update" && session && typeof session === "object") {
         const s = session as {
@@ -75,7 +78,10 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         if (token.email) session.user.email = token.email as string;
         if (typeof token.name === "string") session.user.name = token.name;
         session.user.nickname = (token.nickname as string | null | undefined) ?? null;
-        session.user.role = (token.role as string | null | undefined) ?? "user";
+        session.user.role = resolveUserRole({
+          email: session.user.email,
+          role: (token.role as string | null | undefined) ?? "user",
+        });
         session.user.image =
           typeof token.picture === "string" && token.picture.length > 0 ? token.picture : undefined;
       }

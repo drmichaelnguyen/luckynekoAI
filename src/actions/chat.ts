@@ -7,7 +7,14 @@ import { z } from "zod";
 import { PENDING_IMPORT_VERSION } from "@/lib/document-import/pending-import-shared";
 import { auth } from "@/auth";
 import { call9RouterChatCompletion, has9RouterConfig } from "@/lib/ai/9router";
-import { chooseChatPrimary, orderedProviders, parseModelJson } from "@/lib/ai/model-router";
+import {
+  chooseChatPrimary,
+  chooseChatRouterModel,
+  orderedProviders,
+  parseModelJson,
+} from "@/lib/ai/model-router";
+import { recordAiRequestLog, usageFromGeminiResult, type AiUsageMetrics } from "@/lib/ai/telemetry";
+import { loadAdminRuntimeSettings, resolveProviderChoice } from "@/lib/admin-runtime-settings";
 import { persistFreeformLedgerEntry } from "@/lib/finance/persist-from-chat";
 import { financeContextLines } from "@/lib/finance/seed";
 import {
@@ -356,7 +363,9 @@ async function detectAndSaveChatPreferences(
   userId: string,
   userMessage: string,
   assistantMessage: string,
+  enabled: boolean,
 ): Promise<void> {
+  if (!enabled) return;
   const language = detectLanguageFromMessage(userMessage);
   const verbosity = detectVerbositySignal(userMessage, assistantMessage);
   const explicit = detectExplicitPreference(userMessage);
@@ -376,6 +385,7 @@ export async function handleChatInput(formData: FormData) {
     };
   }
   const userId = session.user.id;
+  const adminSettings = await loadAdminRuntimeSettings();
 
   const message = String(formData.get("message") ?? "").trim();
   const shareContextRaw = String(formData.get("shareContext") ?? "").trim();
@@ -445,7 +455,7 @@ export async function handleChatInput(formData: FormData) {
     };
   }
 
-  const modelName = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
+  const modelName = adminSettings.routing.geminiModel;
 
   const model = apiKey
     ? new GoogleGenerativeAI(apiKey).getGenerativeModel({
@@ -556,31 +566,70 @@ export async function handleChatInput(formData: FormData) {
     let lastModelError: unknown = null;
 
     const providerOrder = orderedProviders({
-      preferred: chooseChatPrimary({
-        hasAttachments: preparedAttachments.length > 0,
-        message,
-        hasConversationContext: Boolean(packedFinancialSummary || recentPriorTurns.length > 0),
-        nineRouterAvailable: has9RouterConfig(),
-      }),
+      preferred: resolveProviderChoice(
+        adminSettings.routing.chatPrimaryProvider,
+        chooseChatPrimary({
+          hasAttachments: preparedAttachments.length > 0,
+          message,
+          hasConversationContext: Boolean(packedFinancialSummary || recentPriorTurns.length > 0),
+          nineRouterAvailable: has9RouterConfig(),
+        }),
+      ),
       geminiAvailable: Boolean(model),
+      nineRouterAvailable: has9RouterConfig(),
+    });
+    const routerModel = chooseChatRouterModel({
+      hasAttachments: preparedAttachments.length > 0,
+      message,
+      hasConversationContext: Boolean(packedFinancialSummary || recentPriorTurns.length > 0),
       nineRouterAvailable: has9RouterConfig(),
     });
 
     for (const provider of providerOrder) {
+      const startedAt = Date.now();
       try {
-        const rawText =
-          provider === "gemini"
-            ? (await model!.generateContent(parts)).response.text()
-            : await call9RouterChatCompletion({
-                systemInstruction: SYSTEM_INSTRUCTION,
-                userPrompt: prompt,
-                temperature: 0.15,
-                attachments: preparedAttachments,
-              });
-        parsed = GeminiResponseSchema.safeParse(parseModelJson(rawText));
+        const selectedModel = provider === "gemini" ? modelName : routerModel;
+        let text = "";
+        let usage: AiUsageMetrics;
+        if (provider === "gemini") {
+          const rawText = await model!.generateContent(parts);
+          text = rawText.response.text();
+          usage = usageFromGeminiResult(rawText);
+        } else {
+          const rawText = await call9RouterChatCompletion({
+            systemInstruction: SYSTEM_INSTRUCTION,
+            userPrompt: prompt,
+            temperature: 0.15,
+            attachments: preparedAttachments,
+            model: adminSettings.routing.nineRouterModel || routerModel,
+            url: adminSettings.routing.nineRouterUrl,
+          });
+          text = rawText.text;
+          usage = rawText.usage;
+        }
+        parsed = GeminiResponseSchema.safeParse(parseModelJson(text));
+        await recordAiRequestLog({
+          userId,
+          feature: "chat_response",
+          provider,
+          model: selectedModel,
+          success: parsed.success,
+          usage,
+          latencyMs: Date.now() - startedAt,
+          errorMessage: parsed.success ? null : "Model returned invalid JSON for chat response.",
+        });
         if (parsed.success) break;
       } catch (e) {
         lastModelError = e;
+        await recordAiRequestLog({
+          userId,
+          feature: "chat_response",
+          provider,
+          model: provider === "gemini" ? modelName : adminSettings.routing.nineRouterModel || routerModel,
+          success: false,
+          latencyMs: Date.now() - startedAt,
+          errorMessage: e instanceof Error ? e.message : "Unknown model error.",
+        });
       }
     }
 
@@ -892,7 +941,13 @@ export async function handleChatInput(formData: FormData) {
     }
 
     // Best-effort chat style learning — never blocks response
-    detectAndSaveChatPreferences(prisma, userId, message, assistantMessage).catch(() => {});
+    detectAndSaveChatPreferences(
+      prisma,
+      userId,
+      message,
+      assistantMessage,
+      adminSettings.learning.enableChatPreferenceLearning,
+    ).catch(() => {});
 
     return {
       ok: true as const,

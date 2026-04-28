@@ -1,4 +1,7 @@
+import { DEFAULT_9ROUTER_MODEL, LARGE_9ROUTER_MODEL } from "@/lib/ai/9router";
+
 export type AiProvider = "gemini" | "9router";
+export type AiRouterModel = typeof DEFAULT_9ROUTER_MODEL | typeof LARGE_9ROUTER_MODEL;
 
 export function orderedProviders(input: {
   preferred: AiProvider;
@@ -24,7 +27,21 @@ export function chooseChatPrimary(input: {
   nineRouterAvailable: boolean;
 }): AiProvider {
   if (!input.nineRouterAvailable) return "gemini";
-  if (input.hasAttachments) return "gemini";
+  return "9router";
+}
+
+export function chooseStructuredTextPrimary(input: { nineRouterAvailable: boolean }): AiProvider {
+  return input.nineRouterAvailable ? "9router" : "gemini";
+}
+
+export function chooseChatRouterModel(input: {
+  hasAttachments: boolean;
+  message: string;
+  hasConversationContext: boolean;
+  nineRouterAvailable: boolean;
+}): AiRouterModel {
+  if (!input.nineRouterAvailable) return DEFAULT_9ROUTER_MODEL;
+  if (input.hasAttachments) return DEFAULT_9ROUTER_MODEL;
 
   const text = input.message.toLowerCase();
   const needsReasoning =
@@ -34,11 +51,11 @@ export function chooseChatPrimary(input: {
       text,
     );
 
-  return needsReasoning ? "9router" : "gemini";
+  return needsReasoning ? LARGE_9ROUTER_MODEL : DEFAULT_9ROUTER_MODEL;
 }
 
-export function chooseStructuredTextPrimary(input: { nineRouterAvailable: boolean }): AiProvider {
-  return input.nineRouterAvailable ? "9router" : "gemini";
+export function chooseStructuredTextRouterModel(): AiRouterModel {
+  return DEFAULT_9ROUTER_MODEL;
 }
 
 export function parseModelJson(rawText: string): unknown {

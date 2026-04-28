@@ -5,7 +5,14 @@ import { z } from "zod";
 
 import { auth } from "@/auth";
 import { call9RouterChatCompletion, has9RouterConfig } from "@/lib/ai/9router";
-import { chooseStructuredTextPrimary, orderedProviders, parseModelJson } from "@/lib/ai/model-router";
+import {
+  chooseStructuredTextPrimary,
+  chooseStructuredTextRouterModel,
+  orderedProviders,
+  parseModelJson,
+} from "@/lib/ai/model-router";
+import { recordAiRequestLog, usageFromGeminiResult, type AiUsageMetrics } from "@/lib/ai/telemetry";
+import { loadAdminRuntimeSettings, resolveProviderChoice } from "@/lib/admin-runtime-settings";
 import { findOrCreateCategory } from "@/lib/finance/category-resolver";
 import { persistTransactionListLedgerEntries } from "@/lib/finance/persist-from-chat";
 import { persistPaystubLedgerEntry, persistReceiptLedgerEntry } from "@/lib/finance/persist-receipt-paystub";
@@ -37,6 +44,7 @@ const MergeSchema = z.object({
 });
 
 async function mergeProposedWithUserCorrections(input: {
+  userId?: string;
   documentKind: "receipt" | "canadian_paystub" | "payroll_document";
   proposed: Record<string, unknown>;
   extractedTextSummary: string;
@@ -47,7 +55,8 @@ async function mergeProposedWithUserCorrections(input: {
     return input.proposed;
   }
 
-  const modelName = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
+  const adminSettings = await loadAdminRuntimeSettings();
+  const modelName = adminSettings.routing.geminiModel;
   const systemInstruction = `You apply a user's correction instructions to structured financial extraction JSON.
 Return JSON only (no markdown) with exactly one of these keys populated to match the document kind:
 { "receipt": object } OR { "paystub": object }
@@ -76,25 +85,58 @@ Return only valid JSON with a single top-level key "receipt" or "paystub" matchi
   try {
     let parsed: z.SafeParseReturnType<unknown, z.infer<typeof MergeSchema>> | null = null;
     const providerOrder = orderedProviders({
-      preferred: chooseStructuredTextPrimary({ nineRouterAvailable: has9RouterConfig() }),
+      preferred: resolveProviderChoice(
+        adminSettings.routing.structuredPrimaryProvider,
+        chooseStructuredTextPrimary({ nineRouterAvailable: has9RouterConfig() }),
+      ),
       geminiAvailable: Boolean(model),
       nineRouterAvailable: has9RouterConfig(),
     });
 
     for (const provider of providerOrder) {
+      const startedAt = Date.now();
       try {
-        const raw =
-          provider === "gemini"
-            ? (await model!.generateContent(prompt)).response.text()
-            : await call9RouterChatCompletion({
-                systemInstruction,
-                userPrompt: prompt,
-                temperature: 0.1,
-              });
-        parsed = MergeSchema.safeParse(parseModelJson(raw));
+        const selectedModel = provider === "gemini" ? modelName : adminSettings.routing.nineRouterModel || chooseStructuredTextRouterModel();
+        let text = "";
+        let usage: AiUsageMetrics;
+        if (provider === "gemini") {
+          const raw = await model!.generateContent(prompt);
+          text = raw.response.text();
+          usage = usageFromGeminiResult(raw);
+        } else {
+          const raw = await call9RouterChatCompletion({
+            systemInstruction,
+            userPrompt: prompt,
+            temperature: 0.1,
+            model: adminSettings.routing.nineRouterModel || chooseStructuredTextRouterModel(),
+            url: adminSettings.routing.nineRouterUrl,
+          });
+          text = raw.text;
+          usage = raw.usage;
+        }
+        parsed = MergeSchema.safeParse(parseModelJson(text));
+        await recordAiRequestLog({
+          userId: input.userId,
+          feature: "document_import_merge",
+          provider,
+          model: selectedModel,
+          success: parsed.success,
+          usage,
+          latencyMs: Date.now() - startedAt,
+          errorMessage: parsed.success ? null : "Model returned invalid JSON for document import merge.",
+        });
         if (parsed.success) break;
-      } catch {
+      } catch (error) {
         parsed = null;
+        await recordAiRequestLog({
+          userId: input.userId,
+          feature: "document_import_merge",
+          provider,
+          model: provider === "gemini" ? modelName : adminSettings.routing.nineRouterModel || chooseStructuredTextRouterModel(),
+          success: false,
+          latencyMs: Date.now() - startedAt,
+          errorMessage: error instanceof Error ? error.message : "Unknown model error.",
+        });
       }
     }
     if (!parsed?.success) return input.proposed;
@@ -127,6 +169,7 @@ export async function resolveDocumentImportAction(formData: FormData): Promise<R
   if (!session?.user?.id) {
     return { ok: false, error: "Sign in to continue." };
   }
+  const adminSettings = await loadAdminRuntimeSettings();
 
   const chatTurnId = String(formData.get("chatTurnId") ?? "").trim();
   const mode = String(formData.get("mode") ?? "").trim().toLowerCase();
@@ -187,6 +230,7 @@ export async function resolveDocumentImportAction(formData: FormData): Promise<R
 
   if (mode === "edit") {
     finalStructured = await mergeProposedWithUserCorrections({
+      userId: session.user.id,
       documentKind: pending.documentKind,
       proposed: initialProposed,
       extractedTextSummary: pending.extractedTextSummary,
@@ -211,8 +255,13 @@ export async function resolveDocumentImportAction(formData: FormData): Promise<R
 
   // Apply learned merchant-category rules before persisting
   try {
-    const patterns = await loadSpendingPatterns(prisma, session.user.id);
-    finalStructured = applyMerchantCategoryRule(finalStructured, patterns.merchantHints);
+    const patterns = await loadSpendingPatterns(prisma, session.user.id, {
+      enabled: adminSettings.learning.enableMerchantLearning,
+      minMerchantFrequency: adminSettings.learning.merchantLearningMinFrequency,
+    });
+    finalStructured = applyMerchantCategoryRule(finalStructured, patterns.merchantHints, {
+      minMerchantFrequency: adminSettings.learning.merchantLearningMinFrequency,
+    });
   } catch {
     // learning rules are best-effort; continue if they fail
   }
