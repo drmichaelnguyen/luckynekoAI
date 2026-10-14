@@ -1,5 +1,8 @@
 import type { PrismaClient } from "@prisma/client";
 
+import { inferCategoryFromMerchant, isWeakCategoryLabel } from "@/lib/finance/merchant-category-inference";
+import { parseLineItems, resolveTransactionCategory } from "@/lib/finance/line-item-category";
+
 export type MerchantHint = {
   merchant: string;
   categoryName: string;
@@ -125,23 +128,73 @@ export function buildSpendingPatternLines(ctx: SpendingPatternContext): string[]
   return lines;
 }
 
+function merchantHintMatches(merchantLower: string, hintMerchant: string): boolean {
+  const hintLower = hintMerchant.toLowerCase().trim();
+  if (!hintLower) return false;
+  return (
+    hintLower === merchantLower ||
+    merchantLower.includes(hintLower) ||
+    hintLower.includes(merchantLower)
+  );
+}
+
 export function applyMerchantCategoryRule(
   structured: Record<string, unknown>,
   merchantHints: MerchantHint[],
   options?: { minMerchantFrequency?: number },
 ): Record<string, unknown> {
-  const merchant = structured.merchant;
-  if (!merchant || typeof merchant !== "string") return structured;
+  const existingCategory =
+    typeof structured.category === "string"
+      ? structured.category
+      : typeof structured.categoryName === "string"
+        ? structured.categoryName
+        : null;
+  if (existingCategory && !isWeakCategoryLabel(existingCategory)) return structured;
+
+  const merchant = typeof structured.merchant === "string" ? structured.merchant : null;
+  const lineItems = parseLineItems(structured.lineItems);
+  const notes =
+    typeof structured.notes === "string"
+      ? structured.notes
+      : typeof structured.memo === "string"
+        ? structured.memo
+        : null;
+
+  if (!merchant && lineItems.length === 0) return structured;
+
+  const resolved = resolveTransactionCategory({
+    category: existingCategory,
+    merchant,
+    notes,
+    lineItems,
+  });
+  if (resolved) {
+    return {
+      ...structured,
+      category: resolved,
+    };
+  }
+
+  if (!merchant) return structured;
 
   const merchantLower = merchant.toLowerCase().trim();
+  const minFrequency = options?.minMerchantFrequency ?? 3;
   const hint = merchantHints.find(
-    (h) => h.frequency >= (options?.minMerchantFrequency ?? 3) && h.merchant.toLowerCase() === merchantLower,
+    (h) => h.frequency >= minFrequency && merchantHintMatches(merchantLower, h.merchant),
   );
 
   if (hint) {
     return {
       ...structured,
       category: hint.categoryName,
+    };
+  }
+
+  const inferred = inferCategoryFromMerchant(merchant, notes);
+  if (inferred) {
+    return {
+      ...structured,
+      category: inferred,
     };
   }
 

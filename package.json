@@ -9,7 +9,9 @@
     "start:stack": "./scripts/run-with-cloudflare.sh",
     "lint": "next lint",
     "postinstall": "prisma generate",
-    "db:push": "prisma db push"
+    "db:push": "prisma db push",
+    "repair:amounts": "npx tsx scripts/repair-amount-cents.ts",
+    "agent:harness": "npx tsx scripts/agent-harness.ts"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.0",

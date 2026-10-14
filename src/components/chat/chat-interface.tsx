@@ -32,18 +32,23 @@ import {
   acknowledgeShareImportAction,
   getShareImportAction,
   handleChatInput,
+  reportChatClientDebugAction,
 } from "@/actions/chat";
 import { recordChatReplyFeedbackAction } from "@/actions/chat-feedback";
 import { getPendingConfirmCountAction } from "@/actions/finance";
-import {
-  AdvancedToolsPanel,
+import { AdvancedToolsPanel,
   type AdvancedToolsTabId,
 } from "@/components/chat/advanced-tools-panel";
+import { AlertsPanel } from "@/components/chat/alerts-panel";
 import { BottomNav } from "@/components/chat/bottom-nav";
 import { DailySpendCheckinBanner } from "@/components/chat/daily-spend-checkin-banner";
 import { DocumentImportBar } from "@/components/chat/document-import-bar";
 import { LedgerEditConfirmBar } from "@/components/chat/ledger-edit-confirm-bar";
 import { AnalyticsChatCard, type ChatAnalyticsStructured } from "@/components/chat/analytics-card";
+import {
+  LedgerSearchResults,
+  type ChatLedgerQueryStructured,
+} from "@/components/chat/ledger-search-results";
 import { LuckyNekoAvatar, LuckyNekoMascot } from "@/components/mascot/lucky-neko";
 import { useLocale } from "@/contexts/locale-context";
 import { Button } from "@/components/ui/button";
@@ -139,6 +144,20 @@ function parseAnalyticsStructured(value: string): ChatAnalyticsStructured | null
   }
 }
 
+function parseLedgerQueryStructured(value: string): ChatLedgerQueryStructured | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const maybe = parsed as Partial<ChatLedgerQueryStructured>;
+    if (maybe.documentKind !== "ledger_query" || !maybe.ledgerQuery || typeof maybe.ledgerQuery !== "object") {
+      return null;
+    }
+    return maybe as ChatLedgerQueryStructured;
+  } catch {
+    return null;
+  }
+}
+
 type ChatSendResult =
   | { ok: true; speakText: string }
   | { ok: false; error: string; restoreComposer: boolean };
@@ -155,6 +174,7 @@ export function ChatInterface() {
 
   const [draft, setDraft] = useState("");
   const [files, setFiles] = useState<File[]>([]);
+  const [failedSendError, setFailedSendError] = useState<string | null>(null);
   const [shareContext, setShareContext] = useState<
     { title?: string; text?: string; url?: string } | undefined
   >(undefined);
@@ -162,6 +182,7 @@ export function ChatInterface() {
   const [isPending, startTransition] = useTransition();
   const [chatBusy, setChatBusy] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [alertsOpen, setAlertsOpen] = useState(false);
   const [toolsInitialTab, setToolsInitialTab] = useState<AdvancedToolsTabId>("dashboard");
   const [pendingConfirmCount, setPendingConfirmCount] = useState(0);
   const [pendingDocumentImport, setPendingDocumentImport] = useState<PendingDocumentImport | null>(null);
@@ -463,9 +484,23 @@ export function ChatInterface() {
           formData.set("conversationPackedSummary", summary);
         }
         formData.set("conversationHistoryJson", JSON.stringify(recentPriorTurnsForApi(fullIncludingUser)));
+        const uploadMeta = outgoingFiles.map((file) => ({
+          size: file.size,
+          type: file.type || "empty",
+          nameLen: (file.name || "").length,
+          ext: (file.name || "").split(".").pop()?.slice(0, 8) || "",
+        }));
+        formData.set("debugUploadMeta", JSON.stringify({ retry: Boolean(trimmed === "" && outgoingFiles.length > 0), files: uploadMeta }));
         for (const file of outgoingFiles) {
           formData.append("files", file);
         }
+        // #region agent log
+        void reportChatClientDebugAction({
+          hypothesisId: "A-E",
+          message: "client about to call handleChatInput",
+          data: { fileCount: outgoingFiles.length, files: uploadMeta, historyTurns: fullIncludingUser.length },
+        });
+        // #endregion
         if (outgoingShare && (outgoingShare.title || outgoingShare.text || outgoingShare.url)) {
           formData.set("shareContext", JSON.stringify(outgoingShare));
         }
@@ -495,7 +530,7 @@ export function ChatInterface() {
               content: result.error,
             },
           ]);
-          return { ok: false, error: result.error, restoreComposer: false };
+          return { ok: false, error: result.error, restoreComposer: true };
         }
 
         const structuredJson = JSON.stringify(result.structured, null, 2);
@@ -532,6 +567,22 @@ export function ChatInterface() {
           e instanceof Error
             ? e.message
             : "Something went wrong sending your message. If you attached a large photo, try a smaller image or JPEG export.";
+        // #region agent log
+        void reportChatClientDebugAction({
+          hypothesisId: "A-C-F",
+          message: "client handleChatInput threw",
+          data: {
+            errName: e instanceof Error ? e.name : typeof e,
+            errMessage: base.slice(0, 300),
+            fileCount: outgoingFiles.length,
+            files: outgoingFiles.map((file) => ({
+              size: file.size,
+              type: file.type || "empty",
+              ext: (file.name || "").split(".").pop()?.slice(0, 8) || "",
+            })),
+          },
+        });
+        // #endregion
         const hint =
           base.includes("Body") || base.includes("413") || base.toLowerCase().includes("mb")
             ? `${base}\n\nTip: camera photos are often several MB — this app needs the full image under the configured upload limit. Try exporting a smaller JPEG.`
@@ -590,6 +641,7 @@ export function ChatInterface() {
     const outgoingShare = shareContext;
     const att = attachmentSummary;
 
+    setFailedSendError(null);
     setDraft("");
     setFiles([]);
     setShareContext(undefined);
@@ -607,6 +659,7 @@ export function ChatInterface() {
           setDraft(trimmed);
           setFiles(outgoingFiles);
           setShareContext(outgoingShare);
+          setFailedSendError(r.error);
         }
       })();
     });
@@ -681,6 +734,7 @@ export function ChatInterface() {
                 setMessages(defaultWelcomeMessages(locale));
                 setPackedFinancialSummary("");
                 setPackedThroughIndex(0);
+                setFailedSendError(null);
                 chatHydratedKeyRef.current = "";
                 try { localStorage.removeItem(CHAT_DAY_STORAGE_KEY); } catch { /* ignore */ }
               }}
@@ -720,6 +774,12 @@ export function ChatInterface() {
         initialTab={toolsInitialTab}
         onClose={() => setToolsOpen(false)}
         onBooksChanged={refreshPendingCount}
+      />
+
+      <AlertsPanel
+        open={alertsOpen}
+        onClose={() => setAlertsOpen(false)}
+        onChanged={refreshPendingCount}
       />
 
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-3 pb-[calc(8rem+env(safe-area-inset-bottom))] pt-4">
@@ -825,11 +885,23 @@ export function ChatInterface() {
                       ) : null}
 
                       {(() => {
-                        const analyticsStructured = m.structuredJson ? parseAnalyticsStructured(m.structuredJson) : null;
+                        const analyticsStructured = m.structuredJson
+                          ? parseAnalyticsStructured(m.structuredJson)
+                          : null;
+                        const ledgerStructured = m.structuredJson
+                          ? parseLedgerQueryStructured(m.structuredJson)
+                          : null;
+                        const showRawJson =
+                          m.structuredJson && !analyticsStructured && !ledgerStructured;
                         return (
                           <>
-                            {analyticsStructured ? <AnalyticsChatCard analytics={analyticsStructured.analytics} /> : null}
-                            {m.structuredJson ? (
+                            {analyticsStructured ? (
+                              <AnalyticsChatCard analytics={analyticsStructured.analytics} />
+                            ) : null}
+                            {ledgerStructured ? (
+                              <LedgerSearchResults data={ledgerStructured.ledgerQuery} />
+                            ) : null}
+                            {showRawJson ? (
                               <details className="rounded-xl border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
                                 <summary className="cursor-pointer select-none text-foreground">
                                   Structured JSON (for DB insert)
@@ -919,6 +991,26 @@ export function ChatInterface() {
                     {file.name}
                   </button>
                 ))}
+              </div>
+            ) : null}
+
+            {failedSendError && files.length > 0 ? (
+              <div className="mb-2 flex items-center justify-between gap-3 rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2">
+                <p className="min-w-0 text-xs text-destructive">
+                  Upload failed. Your file is still attached and ready to be read again.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 shrink-0 gap-1.5 border-destructive/30"
+                  onClick={submit}
+                  disabled={isPending || chatBusy || files.length === 0}
+                  title={failedSendError}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Retry upload
+                </Button>
               </div>
             ) : null}
 
@@ -1090,10 +1182,7 @@ export function ChatInterface() {
         {/* ── Bottom navigation bar ── */}
         <BottomNav
           pendingCount={pendingConfirmCount}
-          onNotificationsClick={() => {
-            setToolsInitialTab("confirm");
-            setToolsOpen(true);
-          }}
+          onNotificationsClick={() => setAlertsOpen(true)}
         />
       </div>
     </div>

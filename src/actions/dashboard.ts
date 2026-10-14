@@ -4,10 +4,21 @@ import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 
 import { auth } from "@/auth";
+import { amountCentsToMajor, majorToAmountCents } from "@/lib/finance/amount-cents";
+import { getExchangeRates } from "@/lib/finance/exchange-rates";
 import { prisma } from "@/lib/prisma";
 
 export type DashboardRange = "30d" | "month" | "all";
 export type DashboardDrillLevel = "year" | "month" | "week" | "transaction";
+
+export type DashboardWindowInput =
+  | DashboardRange
+  | {
+      range: DashboardRange;
+      fromIso?: string | null;
+      toIso?: string | null;
+      label?: string | null;
+    };
 
 export type LedgerDashboardResult =
   | {
@@ -15,6 +26,7 @@ export type LedgerDashboardResult =
       range: DashboardRange;
       rangeLabel: string;
       fromIso: string | null;
+      toIso: string | null;
       displayCurrency: string;
       totals: {
         expenseCents: number;
@@ -50,10 +62,33 @@ function startDateForRange(range: DashboardRange): Date | null {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0));
 }
 
+function parseIsoDate(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 function rangeLabel(range: DashboardRange): string {
   if (range === "all") return "All time";
   if (range === "30d") return "Last 30 days";
   return "This month (UTC)";
+}
+
+function resolveWindow(input: DashboardWindowInput): {
+  range: DashboardRange;
+  rangeLabel: string;
+  from: Date | null;
+  to: Date | null;
+} {
+  if (typeof input === "string") {
+    return { range: input, rangeLabel: rangeLabel(input), from: startDateForRange(input), to: null };
+  }
+  return {
+    range: input.range,
+    rangeLabel: input.label?.trim() || rangeLabel(input.range),
+    from: parseIsoDate(input.fromIso) ?? startDateForRange(input.range),
+    to: parseIsoDate(input.toIso),
+  };
 }
 
 function startOfUtcYear(year: number): Date {
@@ -86,6 +121,29 @@ function mondayUtcStart(d: Date): Date {
 
 function pad2(value: number): string {
   return String(value).padStart(2, "0");
+}
+
+async function buildDisplayCurrencyConverter(displayCurrency: string) {
+  const rates = await getExchangeRates(displayCurrency);
+  return (amountCents: number, currency: string): number | null => {
+    const sourceCurrency = currency.toUpperCase().slice(0, 3);
+    if (sourceCurrency === displayCurrency) return amountCents;
+    const sourcePerDisplay = rates?.[sourceCurrency];
+    if (!sourcePerDisplay || sourcePerDisplay <= 0) return null;
+
+    const sourceMajor = amountCentsToMajor(amountCents, sourceCurrency);
+    return majorToAmountCents(sourceMajor / sourcePerDisplay, displayCurrency);
+  };
+}
+
+function convertAmountRows<T extends { amountCents: number; currency: string }>(
+  rows: T[],
+  convertToDisplayCurrency: (amountCents: number, currency: string) => number | null,
+): T[] {
+  return rows.flatMap((row) => {
+    const convertedCents = convertToDisplayCurrency(row.amountCents, row.currency);
+    return convertedCents == null ? [] : [{ ...row, amountCents: convertedCents }];
+  });
 }
 
 function monthLabel(year: number, monthIndex: number): string {
@@ -197,10 +255,11 @@ function groupDateBuckets(
     }));
 }
 
-export async function getLedgerDashboardAction(range: DashboardRange): Promise<LedgerDashboardResult> {
+export async function getLedgerDashboardAction(input: DashboardWindowInput): Promise<LedgerDashboardResult> {
   const session = await auth();
   if (!session?.user?.id) return { ok: false, error: "Unauthorized" };
 
+  const window = resolveWindow(input);
   const userId = session.user.id;
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -208,50 +267,34 @@ export async function getLedgerDashboardAction(range: DashboardRange): Promise<L
   });
   const displayCurrency = (user?.preferredCurrency ?? "CAD").toUpperCase().slice(0, 3);
 
-  const from = startDateForRange(range);
-  const dateWhere = from ? { gte: from } : undefined;
+  const dateWhere = window.from
+    ? {
+        gte: window.from,
+        ...(window.to ? { lt: window.to } : {}),
+      }
+    : undefined;
 
   const baseWhere = {
     userId,
-    currency: displayCurrency,
     status: { not: "rejected" as const },
     ...(dateWhere ? { occurredAt: dateWhere } : {}),
   };
 
-  const [wallets, categories, expenseByCat, incomeByCat, expenseByWallet, incomeByWallet, merchants, txCount, pendingCount] =
+  const [convertToDisplayCurrency, wallets, categories, transactions, txCount, pendingCount] =
     await Promise.all([
+      buildDisplayCurrencyConverter(displayCurrency),
       prisma.wallet.findMany({ where: { userId }, select: { id: true, name: true } }),
       prisma.category.findMany({ where: { userId }, select: { id: true, name: true, icon: true } }),
-      prisma.transaction.groupBy({
-        by: ["categoryId"],
-        where: { ...baseWhere, direction: "out" },
-        _sum: { amountCents: true },
-      }),
-      prisma.transaction.groupBy({
-        by: ["categoryId"],
-        where: { ...baseWhere, direction: "in" },
-        _sum: { amountCents: true },
-      }),
-      prisma.transaction.groupBy({
-        by: ["walletId"],
-        where: { ...baseWhere, direction: "out" },
-        _sum: { amountCents: true },
-      }),
-      prisma.transaction.groupBy({
-        by: ["walletId"],
-        where: { ...baseWhere, direction: "in" },
-        _sum: { amountCents: true },
-      }),
-      prisma.transaction.groupBy({
-        by: ["merchant"],
-        where: {
-          ...baseWhere,
-          direction: "out",
-          merchant: { not: null },
+      prisma.transaction.findMany({
+        where: baseWhere,
+        select: {
+          amountCents: true,
+          currency: true,
+          direction: true,
+          categoryId: true,
+          walletId: true,
+          merchant: true,
         },
-        _sum: { amountCents: true },
-        orderBy: { _sum: { amountCents: "desc" } },
-        take: 6,
       }),
       prisma.transaction.count({ where: { ...baseWhere } }),
       prisma.transaction.count({
@@ -263,12 +306,30 @@ export async function getLedgerDashboardAction(range: DashboardRange): Promise<L
   const walletMap = new Map(wallets.map((w) => [w.id, w.name]));
 
   const expenseMap = new Map<string | null, number>();
-  for (const row of expenseByCat) {
-    expenseMap.set(row.categoryId, row._sum.amountCents ?? 0);
-  }
   const incomeMap = new Map<string | null, number>();
-  for (const row of incomeByCat) {
-    incomeMap.set(row.categoryId, row._sum.amountCents ?? 0);
+  const wExpense = new Map<string, number>();
+  const wIncome = new Map<string, number>();
+  const merchantExpense = new Map<string, number>();
+
+  let expenseCents = 0;
+  let incomeCents = 0;
+
+  for (const tx of transactions) {
+    const convertedCents = convertToDisplayCurrency(tx.amountCents, tx.currency);
+    if (convertedCents == null) continue;
+
+    if (tx.direction === "out") {
+      expenseCents += convertedCents;
+      expenseMap.set(tx.categoryId, (expenseMap.get(tx.categoryId) ?? 0) + convertedCents);
+      wExpense.set(tx.walletId, (wExpense.get(tx.walletId) ?? 0) + convertedCents);
+      if (tx.merchant) {
+        merchantExpense.set(tx.merchant, (merchantExpense.get(tx.merchant) ?? 0) + convertedCents);
+      }
+    } else {
+      incomeCents += convertedCents;
+      incomeMap.set(tx.categoryId, (incomeMap.get(tx.categoryId) ?? 0) + convertedCents);
+      wIncome.set(tx.walletId, (wIncome.get(tx.walletId) ?? 0) + convertedCents);
+    }
   }
 
   const catIds = new Set<string | null>([...expenseMap.keys(), ...incomeMap.keys()]);
@@ -284,14 +345,6 @@ export async function getLedgerDashboardAction(range: DashboardRange): Promise<L
   });
   byCategory.sort((a, b) => b.expenseCents + b.incomeCents - (a.expenseCents + a.incomeCents));
 
-  const wExpense = new Map<string, number>();
-  for (const row of expenseByWallet) {
-    wExpense.set(row.walletId, row._sum.amountCents ?? 0);
-  }
-  const wIncome = new Map<string, number>();
-  for (const row of incomeByWallet) {
-    wIncome.set(row.walletId, row._sum.amountCents ?? 0);
-  }
   const walletIds = new Set([...wExpense.keys(), ...wIncome.keys()]);
   const byWallet = [...walletIds].map((id) => ({
     walletId: id,
@@ -301,27 +354,17 @@ export async function getLedgerDashboardAction(range: DashboardRange): Promise<L
   }));
   byWallet.sort((a, b) => b.expenseCents + b.incomeCents - (a.expenseCents + a.incomeCents));
 
-  let expenseCents = 0;
-  let incomeCents = 0;
-  for (const row of expenseByCat) {
-    expenseCents += row._sum.amountCents ?? 0;
-  }
-  for (const row of incomeByCat) {
-    incomeCents += row._sum.amountCents ?? 0;
-  }
-
-  const topMerchants = merchants
-    .filter((m) => m.merchant && (m._sum.amountCents ?? 0) > 0)
-    .map((m) => ({
-      label: m.merchant as string,
-      expenseCents: m._sum.amountCents ?? 0,
-    }));
+  const topMerchants = [...merchantExpense.entries()]
+    .map(([label, cents]) => ({ label, expenseCents: cents }))
+    .sort((a, b) => b.expenseCents - a.expenseCents)
+    .slice(0, 6);
 
   return {
     ok: true,
-    range,
-    rangeLabel: rangeLabel(range),
-    fromIso: from ? from.toISOString() : null,
+    range: window.range,
+    rangeLabel: window.rangeLabel,
+    fromIso: window.from ? window.from.toISOString() : null,
+    toIso: window.to ? window.to.toISOString() : null,
     displayCurrency,
     totals: {
       expenseCents,
@@ -341,6 +384,9 @@ export type DashboardDrillLens = "category" | "wallet" | "merchant" | "overview"
 const DrilldownInputSchema = z
   .object({
     range: z.enum(["30d", "month", "all"]),
+    fromIso: z.string().datetime().optional(),
+    toIso: z.string().datetime().optional(),
+    label: z.string().max(120).optional(),
     lens: z.enum(["category", "wallet", "merchant", "overview"]),
     categoryId: z.union([z.string().min(1), z.null()]).optional(),
     walletId: z.string().min(1).optional(),
@@ -422,7 +468,7 @@ export async function getLedgerDashboardDrilldownAction(
   const session = await auth();
   if (!session?.user?.id) return { ok: false, error: "Unauthorized" };
 
-  const { range, lens, categoryId, walletId, merchant, flow, level, year, month, weekStart } = parsed.data;
+  const { range, fromIso, toIso, label, lens, categoryId, walletId, merchant, flow, level, year, month, weekStart } = parsed.data;
   const userId = session.user.id;
 
   const user = await prisma.user.findUnique({
@@ -430,20 +476,27 @@ export async function getLedgerDashboardDrilldownAction(
     select: { preferredCurrency: true },
   });
   const displayCurrency = (user?.preferredCurrency ?? "CAD").toUpperCase().slice(0, 3);
+  const convertToDisplayCurrency = await buildDisplayCurrencyConverter(displayCurrency);
 
   const where: Prisma.TransactionWhereInput = {
     userId,
-    currency: displayCurrency,
     status: { not: "rejected" },
   };
-  const from = startDateForRange(range);
-  const dateWhere = from ? { gte: from } : undefined;
+  const from = fromIso ? new Date(fromIso) : startDateForRange(range);
+  const to = toIso ? new Date(toIso) : null;
+  const dateWhere =
+    from && !Number.isNaN(from.getTime())
+      ? {
+          gte: from,
+          ...(to && !Number.isNaN(to.getTime()) ? { lt: to } : {}),
+        }
+      : undefined;
   if (dateWhere) {
     where.occurredAt = dateWhere;
   }
 
   let title = "Activity";
-  let subtitle = `${rangeLabel(range)} · ${displayCurrency}`;
+  let subtitle = `${label?.trim() || rangeLabel(range)} · ${displayCurrency}`;
   const drillLevel: DashboardDrillLevel = lens === "category" ? level ?? "year" : "transaction";
 
   if (lens === "category") {
@@ -459,11 +512,11 @@ export async function getLedgerDashboardDrilldownAction(
     if (drillLevel === "year") {
       const yearRows = await prisma.transaction.findMany({
         where: categoryScope,
-        select: { occurredAt: true, amountCents: true, direction: true },
+        select: { occurredAt: true, amountCents: true, direction: true, currency: true },
         orderBy: { occurredAt: "asc" },
         take: 10000,
       });
-      const buckets = groupDateBuckets(yearRows, "year");
+      const buckets = groupDateBuckets(convertAmountRows(yearRows, convertToDisplayCurrency), "year");
       subtitle = `${rangeLabel(range)} · ${displayCurrency} · years`;
       if (flow === "out") subtitle = `Outflows · ${subtitle}`;
       else if (flow === "in") subtitle = `Inflows · ${subtitle}`;
@@ -492,11 +545,11 @@ export async function getLedgerDashboardDrilldownAction(
       });
       const monthRows = await prisma.transaction.findMany({
         where: categoryScope,
-        select: { occurredAt: true, amountCents: true, direction: true },
+        select: { occurredAt: true, amountCents: true, direction: true, currency: true },
         orderBy: { occurredAt: "asc" },
         take: 10000,
       });
-      const buckets = groupDateBuckets(monthRows, "month");
+      const buckets = groupDateBuckets(convertAmountRows(monthRows, convertToDisplayCurrency), "month");
       subtitle = `${targetYear} · ${displayCurrency} · months`;
       if (flow === "out") subtitle = `Outflows · ${subtitle}`;
       else if (flow === "in") subtitle = `Inflows · ${subtitle}`;
@@ -526,11 +579,11 @@ export async function getLedgerDashboardDrilldownAction(
       });
       const weekRows = await prisma.transaction.findMany({
         where: categoryScope,
-        select: { occurredAt: true, amountCents: true, direction: true },
+        select: { occurredAt: true, amountCents: true, direction: true, currency: true },
         orderBy: { occurredAt: "asc" },
         take: 10000,
       });
-      const buckets = groupDateBuckets(weekRows, "week");
+      const buckets = groupDateBuckets(convertAmountRows(weekRows, convertToDisplayCurrency), "week");
       subtitle = `${monthLabel(targetYear, targetMonthIndex)} · weeks`;
       if (flow === "out") subtitle = `Outflows · ${subtitle}`;
       else if (flow === "in") subtitle = `Inflows · ${subtitle}`;
@@ -568,15 +621,16 @@ export async function getLedgerDashboardDrilldownAction(
       take: 80,
       include: { wallet: true, category: true },
     });
+    const convertedRows = convertAmountRows(rows, convertToDisplayCurrency);
     const buckets = [
       {
         key: weekStart!,
         label: transactionWeekLabel(targetWeekStart),
         periodStart: targetWeekStart.toISOString(),
         periodEnd: addUtcDays(targetWeekStart, 7).toISOString(),
-        outCents: rows.filter((r) => r.direction === "out").reduce((sum, r) => sum + r.amountCents, 0),
-        inCents: rows.filter((r) => r.direction === "in").reduce((sum, r) => sum + r.amountCents, 0),
-        transactionCount: rows.length,
+        outCents: convertedRows.filter((r) => r.direction === "out").reduce((sum, r) => sum + r.amountCents, 0),
+        inCents: convertedRows.filter((r) => r.direction === "in").reduce((sum, r) => sum + r.amountCents, 0),
+        transactionCount: convertedRows.length,
       },
     ];
     const series = buckets.map((bucket) => ({
@@ -585,7 +639,7 @@ export async function getLedgerDashboardDrilldownAction(
       outCents: bucket.outCents,
       inCents: bucket.inCents,
     }));
-    const transactions = rows.map((t) => ({
+    const transactions = convertedRows.map((t) => ({
       id: t.id,
       occurredAt: t.occurredAt.toISOString(),
       direction: t.direction,
@@ -626,13 +680,13 @@ export async function getLedgerDashboardDrilldownAction(
 
   const seriesRows = await prisma.transaction.findMany({
     where,
-    select: { occurredAt: true, amountCents: true, direction: true },
+    select: { occurredAt: true, amountCents: true, direction: true, currency: true },
     orderBy: { occurredAt: "asc" },
     take: 8000,
   });
 
   const bucket = new Map<string, { outCents: number; inCents: number }>();
-  for (const t of seriesRows) {
+  for (const t of convertAmountRows(seriesRows, convertToDisplayCurrency)) {
     const key = weekMode ? mondayUtcStart(t.occurredAt).toISOString().slice(0, 10) : t.occurredAt.toISOString().slice(0, 10);
     const cur = bucket.get(key) ?? { outCents: 0, inCents: 0 };
     if (t.direction === "out") cur.outCents += t.amountCents;
@@ -660,7 +714,7 @@ export async function getLedgerDashboardDrilldownAction(
     include: { wallet: true, category: true },
   });
 
-  const transactions = rows.map((t) => ({
+  const transactions = convertAmountRows(rows, convertToDisplayCurrency).map((t) => ({
     id: t.id,
     occurredAt: t.occurredAt.toISOString(),
     direction: t.direction,

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import { ChevronDown, ChevronUp, Loader2, X, Send, Sparkles } from "lucide-react";
+import { ChevronDown, ChevronUp, Loader2, X, Send, Sparkles, Image as ImageIcon, MessagesSquare } from "lucide-react";
 import {
   getTransactionDetailAction,
   updateTransactionAction,
@@ -12,13 +12,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { transactionMiniChatAction, type TransactionChatHistory } from "@/actions/transaction-chat";
+import { amountCentsToMajor, formatMoneyFromCents, majorToAmountCents } from "@/lib/finance/amount-cents";
 
 function formatDate(iso: string) {
   return iso.slice(0, 10);
 }
 
 function formatMoney(cents: number, currency: string) {
-  return `${currency} ${(Math.abs(cents) / 100).toFixed(2)}`;
+  return formatMoneyFromCents(cents, currency, { signed: false });
 }
 
 export function TransactionDetailDrawer({
@@ -40,6 +41,7 @@ export function TransactionDetailDrawer({
   const [isSaving, startSave] = useTransition();
   const [saveMsg, setSaveMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [isReceiptPreviewOpen, setIsReceiptPreviewOpen] = useState(false);
 
   // Chat state
   const [chatHistory, setChatHistory] = useState<TransactionChatHistory>([]);
@@ -69,6 +71,7 @@ export function TransactionDetailDrawer({
     setLoadError(null);
     setSaveMsg(null);
     setShowHistory(false);
+    setIsReceiptPreviewOpen(false);
     setChatHistory([]);
     setChatInput("");
     startLoad(async () => {
@@ -77,7 +80,7 @@ export function TransactionDetailDrawer({
       setData(r);
       const { tx } = r;
       setMerchant(tx.merchant ?? "");
-      setAmount(String(Math.abs(tx.amountCents) / 100));
+      setAmount(String(amountCentsToMajor(Math.abs(tx.amountCents), tx.currency)));
       setCurrency(tx.currency);
       setDirection(tx.direction);
       setOccurredAt(formatDate(tx.occurredAt));
@@ -95,7 +98,7 @@ export function TransactionDetailDrawer({
       return;
     }
     const fields: EditableFields = {
-      amountCents: Math.round(amountNum * 100),
+      amountCents: majorToAmountCents(amountNum, currency),
       direction,
       currency: currency.toUpperCase(),
       merchant: merchant.trim() || null,
@@ -136,7 +139,9 @@ export function TransactionDetailDrawer({
         
         const edits = res.response.proposedEdit;
         if (edits) {
-          if (edits.amountCents !== undefined && edits.amountCents !== null) setAmount(String(Math.abs(edits.amountCents) / 100));
+          if (edits.amountCents !== undefined && edits.amountCents !== null) {
+            setAmount(String(amountCentsToMajor(Math.abs(edits.amountCents), currency)));
+          }
           if (edits.merchant !== undefined && edits.merchant !== null) setMerchant(edits.merchant);
           if (edits.memo !== undefined && edits.memo !== null) setMemo(edits.memo);
           if (edits.direction !== undefined && edits.direction !== null) setDirection(edits.direction);
@@ -161,6 +166,7 @@ export function TransactionDetailDrawer({
         return acc;
       }, {})
     : {};
+  const transactionInput = data?.tx.originChat?.messages.find((message) => message.isTransactionInput) ?? null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal="true">
@@ -202,8 +208,91 @@ export function TransactionDetailDrawer({
                 )}
               </div>
 
+              {data.tx.originChat && transactionInput && (
+                <div className="rounded-xl border border-primary/20 bg-primary/5 p-3">
+                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+                    <MessagesSquare className="h-4 w-4 text-primary" />
+                    Original chat
+                  </div>
+                  <p className="mb-1 text-[11px] font-medium text-muted-foreground">What you typed</p>
+                  <div className="whitespace-pre-wrap break-words rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground">
+                    {transactionInput.content}
+                  </div>
+                  {transactionInput.attachments?.length ? (
+                    <p className="mt-1.5 text-[11px] text-muted-foreground">
+                      Attached: {transactionInput.attachments.join(", ")}
+                    </p>
+                  ) : null}
+                  <details className="mt-2 border-t border-primary/10 pt-2">
+                    <summary className="cursor-pointer select-none text-xs font-medium text-primary">
+                      View conversation ({data.tx.originChat.messages.length} message{data.tx.originChat.messages.length === 1 ? "" : "s"})
+                    </summary>
+                    <div className="mt-3 max-h-64 space-y-2 overflow-y-auto pr-1">
+                      {data.tx.originChat.messages.map((message, index) => (
+                        <div
+                          key={`${message.role}-${index}`}
+                          className={cn(
+                            "flex",
+                            message.role === "user" ? "justify-end" : "justify-start",
+                          )}
+                        >
+                          <div
+                            className={cn(
+                              "max-w-[88%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-xs",
+                              message.role === "user"
+                                ? "rounded-br-sm bg-primary text-primary-foreground"
+                                : "rounded-bl-sm bg-muted text-foreground",
+                              message.isTransactionInput && "ring-2 ring-primary/30 ring-offset-1",
+                            )}
+                          >
+                            {message.content}
+                            {message.attachments?.length ? (
+                              <div className="mt-1 border-t border-current/20 pt-1 text-[10px] opacity-80">
+                                {message.attachments.join(", ")}
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="mt-2 text-[10px] text-muted-foreground">
+                      Saved {new Date(data.tx.originChat.capturedAt).toLocaleString()}
+                    </p>
+                  </details>
+                </div>
+              )}
+
               {/* Edit form */}
               <div className="space-y-3">
+                {data.tx.receiptImageUrl && (
+                  <div className="rounded-xl border bg-muted/20 p-2">
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-3 rounded-lg p-1 text-left transition hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+                      onClick={() => setIsReceiptPreviewOpen(true)}
+                      aria-label="View linked receipt image"
+                    >
+                      <div className="h-12 w-12 overflow-hidden rounded-md border bg-background">
+                        <img
+                          src={data.tx.receiptImageUrl}
+                          alt="Receipt thumbnail"
+                          className="h-full w-full object-cover"
+                          loading="lazy"
+                        />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                          <ImageIcon className="h-3.5 w-3.5" />
+                          Receipt image
+                        </div>
+                        <p className="truncate text-[11px] text-muted-foreground">
+                          Tap to open full-size preview
+                        </p>
+                      </div>
+                    </button>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-2 gap-3">
                   <label className="space-y-1">
                     <span className="text-xs text-muted-foreground">Amount</span>
@@ -420,6 +509,38 @@ export function TransactionDetailDrawer({
           </div>
         )}
       </div>
+
+      {data?.tx.receiptImageUrl && isReceiptPreviewOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4">
+          <button
+            type="button"
+            className="absolute inset-0"
+            onClick={() => setIsReceiptPreviewOpen(false)}
+            aria-label="Close receipt preview"
+          />
+          <div className="relative z-10 max-h-[90dvh] w-full max-w-3xl overflow-hidden rounded-xl border bg-background">
+            <div className="flex items-center justify-between border-b px-3 py-2">
+              <p className="text-xs font-medium">Receipt preview</p>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => setIsReceiptPreviewOpen(false)}
+                aria-label="Close receipt preview"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="max-h-[calc(90dvh-3rem)] overflow-auto bg-muted/20 p-2">
+              <img
+                src={data.tx.receiptImageUrl}
+                alt="Receipt image"
+                className="mx-auto h-auto max-w-full rounded-md"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

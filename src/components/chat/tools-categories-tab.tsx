@@ -71,13 +71,9 @@ function CategoryRow({ category, isPending, startTransition, onRefresh }: { cate
         <div className="flex items-center gap-3">
           <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full bg-muted">
             {category.icon ? (
-              <Image
+              <img
                 src={category.icon}
                 alt={category.name}
-                width={32}
-                height={32}
-                sizes="32px"
-                unoptimized={category.icon.startsWith("/api/media/")}
                 className="h-full w-full object-cover"
               />
             ) : (

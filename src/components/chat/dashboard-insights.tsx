@@ -1,25 +1,11 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, Loader2 } from "lucide-react";
-import { useCallback, useEffect, useState, useTransition, useRef } from "react";
+import { ArrowLeft, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useState, useTransition, useRef, type TouchEvent } from "react";
 
 import { dashboardMiniChatAction, type DashboardChatHistory } from "@/actions/dashboard-chat";
-import type { DashboardDrilldownResult, DashboardRange, LedgerDashboardResult } from "@/actions/dashboard";
-
-type CategoryRow = {
-  categoryId: string | null;
-  name: string;
-  icon: string | null;
-  expenseCents: number;
-  incomeCents: number;
-};
-type WalletRow = {
-  walletId: string;
-  name: string;
-  expenseCents: number;
-  incomeCents: number;
-};
+import type { DashboardDrilldownResult, LedgerDashboardResult } from "@/actions/dashboard";
 import { getLedgerDashboardDrilldownAction } from "@/actions/dashboard";
 import { TransactionDetailDrawer } from "@/components/chat/transaction-detail-drawer";
 import { Button } from "@/components/ui/button";
@@ -27,10 +13,17 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { Sparkles, Send } from "lucide-react";
 
+import { formatMoneyFromCents } from "@/lib/finance/amount-cents";
+import {
+  canMoveMoneyStoryPeriodForward,
+  moneyStoryPeriodLabel,
+  shiftMoneyStoryPeriod,
+  type MoneyStoryPeriod,
+  type MoneyStoryViewMode,
+} from "@/lib/finance/money-story-period";
+
 function formatMoney(cents: number, currency: string) {
-  const v = (Math.abs(cents) / 100).toFixed(2);
-  const sign = cents < 0 ? "−" : "";
-  return `${sign}${currency} ${v}`;
+  return formatMoneyFromCents(cents, currency);
 }
 
 type DrillSelection =
@@ -103,328 +96,19 @@ function SeriesChart({
   );
 }
 
-function clamp01(value: number): number {
-  return Math.min(1, Math.max(0, value));
-}
+const FLOW_TONES = [
+  "#0F766E",
+  "#B45309",
+  "#1D4ED8",
+  "#BE123C",
+  "#4D7C0F",
+  "#0E7490",
+  "#C2410C",
+  "#334155",
+] as const;
 
-function valueColor(ratio: number, mode: "expense" | "income"): string {
-  const t = clamp01(ratio);
-  if (mode === "expense") {
-    const hue = 34 - t * 28;
-    const saturation = 95;
-    const lightness = 62 - t * 28;
-    return `hsl(${hue} ${saturation}% ${lightness}%)`;
-  }
-  const hue = 182 + t * 44;
-  const saturation = 90;
-  const lightness = 63 - t * 28;
-  return `hsl(${hue} ${saturation}% ${lightness}%)`;
-}
-
-function donutSegmentColor(index: number): string {
-  const hue = (index * 137.508 + 18) % 360;
-  const cycle = index % 4;
-  const saturation = 78;
-  const lightness = [56, 64, 50, 70][cycle];
-  return `hsl(${hue.toFixed(1)} ${saturation}% ${lightness}%)`;
-}
-
-function InteractiveChartBlock<T extends { name: string; expenseCents: number; incomeCents: number; icon?: string | null }>({
-  title,
-  rows,
-  currency,
-  valueKey,
-  onBarTap,
-  enableCircleChart,
-}: {
-  title: string;
-  rows: T[];
-  currency: string;
-  valueKey: "expenseCents" | "incomeCents";
-  onBarTap: (row: T) => void;
-  enableCircleChart?: boolean;
-}) {
-  const [view, setView] = useState<"bar" | "circle">("bar");
-  const [activeIndex, setActiveIndex] = useState(0);
-  const filtered = rows.filter((r) => r[valueKey] > 0);
-  const values = filtered.map((r) => r[valueKey]);
-  const max = values.length > 0 ? Math.max(...values) : 1;
-  const total = values.reduce((sum, v) => sum + v, 0);
-  const mode = valueKey === "expenseCents" ? "expense" : "income";
-
-  useEffect(() => {
-    setActiveIndex(0);
-  }, [title, view, valueKey]);
-
-  if (filtered.length === 0) {
-    return (
-      <div className="rounded-xl border bg-card/50 px-3 py-3">
-        <div className="text-xs font-medium text-foreground">{title}</div>
-        <p className="mt-2 text-xs text-muted-foreground">No data in this range.</p>
-      </div>
-    );
-  }
-
-  const segments = filtered.map((row, index) => {
-    const v = row[valueKey];
-    const pct = (v / total) * 100;
-    return {
-      pct,
-      row,
-      barColor: valueColor(v / max, mode),
-      donutColor: donutSegmentColor(index),
-    };
-  });
-
-  const activeSegment = segments[Math.min(activeIndex, segments.length - 1)] ?? segments[0] ?? null;
-  const circleViewId = `circle-${title.replace(/\s+/g, "-").toLowerCase()}`;
-
-  function makeArcLabel(seg: (typeof segments)[number], index: number) {
-    const radius = 42;
-    const strokeWidth = 12;
-    const circumference = 2 * Math.PI * radius;
-    const startOffset = segments
-      .slice(0, index)
-      .reduce((sum, prev) => sum + circumference * (prev.pct / 100), 0);
-    const arc = circumference * (seg.pct / 100);
-    const centerAngle = (-Math.PI / 2) + (startOffset / circumference) * (Math.PI * 2) + (arc / circumference) * Math.PI;
-    const outerRadius = radius + strokeWidth / 2 + 1.5;
-    const labelRadius = radius + 19;
-    const lineStart = {
-      x: 60 + Math.cos(centerAngle) * outerRadius,
-      y: 60 + Math.sin(centerAngle) * outerRadius,
-    };
-    const elbow = {
-      x: 60 + Math.cos(centerAngle) * (radius + 12),
-      y: 60 + Math.sin(centerAngle) * (radius + 12),
-    };
-    const labelAnchor = {
-      x: 60 + Math.cos(centerAngle) * labelRadius,
-      y: 60 + Math.sin(centerAngle) * labelRadius,
-    };
-    const isRight = Math.cos(centerAngle) >= 0;
-    const labelX = isRight ? 104 : 16;
-    const labelY = Math.max(12, Math.min(108, labelAnchor.y));
-    return {
-      lineStart,
-      elbow,
-      labelX,
-      labelY,
-      anchorX: isRight ? labelX - 1.5 : labelX + 1.5,
-      anchorY: labelY,
-      textAnchor: (isRight ? "start" : "end") as "start" | "end",
-      displayPct: Math.round(seg.pct),
-      centerAngle,
-    };
-  }
-
-  return (
-    <div className="rounded-xl border bg-card px-3 py-3">
-      <div className="flex items-center justify-between">
-        <div className="text-xs font-medium text-foreground">{title}</div>
-        {enableCircleChart && (
-          <div className="flex bg-muted rounded-md p-0.5">
-            <button
-              type="button"
-              className={cn("px-2 py-0.5 text-[10px] rounded-sm transition", view === "bar" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground")}
-              onClick={() => setView("bar")}
-            >
-              Bar
-            </button>
-            <button
-              type="button"
-              className={cn("px-2 py-0.5 text-[10px] rounded-sm transition", view === "circle" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground")}
-              onClick={() => setView("circle")}
-            >
-              Circle
-            </button>
-          </div>
-        )}
-      </div>
-      <p className="mt-1 text-[10px] text-muted-foreground">
-        Tap a {view === "bar" ? "bar" : "segment"} for detail. The higher the amount, the {mode === "expense" ? "hotter" : "cooler"} the color.
-      </p>
-      
-      {view === "bar" ? (
-        <ul className="mt-3 space-y-2">
-          {filtered.map((row) => {
-            const v = row[valueKey];
-            const pct = Math.round((v / max) * 100);
-            const barColor = valueColor(v / max, mode);
-            return (
-              <li key={`${row.name}-${valueKey}`} className="space-y-1">
-                <button
-                  type="button"
-                  onClick={() => onBarTap(row)}
-                  className="w-full rounded-lg text-left ring-offset-background transition hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
-                >
-                  <div className="flex justify-between gap-2 px-0.5 text-[11px]">
-                    <span className="min-w-0 flex items-center gap-1.5 truncate font-medium text-foreground">
-                      {row.icon ? <img src={row.icon} alt="" className="h-4 w-4 rounded-sm object-cover" /> : null}
-                      {row.name}
-                    </span>
-                    <span
-                      className="shrink-0 font-medium"
-                      style={{ color: barColor }}
-                    >
-                      {formatMoney(v, currency)}
-                    </span>
-                  </div>
-                  <div className="mt-1 h-2.5 overflow-hidden rounded-full bg-muted">
-                    <div
-                      className="h-full rounded-full transition-[width]"
-                      style={{
-                        width: `${pct}%`,
-                        backgroundColor: barColor,
-                      }}
-                    />
-                  </div>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      ) : (
-        <div className="mt-4 flex flex-col items-center gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="relative flex h-56 w-56 shrink-0 items-center justify-center">
-            <div className="absolute inset-0 rounded-full bg-gradient-to-br from-background via-muted/35 to-transparent" />
-            <svg viewBox="0 0 120 120" className="relative h-full w-full overflow-visible drop-shadow-sm">
-              <defs>
-                <filter id={`chart-shadow-${circleViewId}`}>
-                  <feDropShadow dx="0" dy="2" stdDeviation="2" floodColor="rgba(0,0,0,0.12)" />
-                </filter>
-              </defs>
-              {segments.map((seg, index) => {
-                const radius = 42;
-                const strokeWidth = 12;
-                const circumference = 2 * Math.PI * radius;
-                const arc = circumference * (seg.pct / 100);
-                const offset =
-                  circumference -
-                  segments.slice(0, index).reduce((sum, prev) => sum + circumference * (prev.pct / 100), 0);
-                const isActive = index === activeIndex;
-                return (
-                  <g key={seg.row.name}>
-                    <circle
-                      r={radius}
-                      cx="60"
-                      cy="60"
-                      fill="transparent"
-                      stroke={seg.donutColor}
-                      strokeWidth={isActive ? strokeWidth + 2 : strokeWidth}
-                      strokeLinecap="round"
-                      strokeDasharray={`${arc} ${circumference - arc}`}
-                      strokeDashoffset={offset}
-                      transform="rotate(-90 60 60)"
-                      filter={`url(#chart-shadow-${circleViewId})`}
-                      className={cn(
-                        "cursor-pointer transition-[opacity,stroke-width,transform] hover:opacity-85 active:opacity-80",
-                        isActive && "opacity-100",
-                      )}
-                      onClick={() => {
-                        setActiveIndex(index);
-                        onBarTap(seg.row);
-                      }}
-                      onMouseEnter={() => setActiveIndex(index)}
-                      onFocus={() => setActiveIndex(index)}
-                      tabIndex={0}
-                      role="button"
-                      aria-label={`${seg.row.name}, ${Math.round(seg.pct)} percent, ${formatMoney(seg.row[valueKey], currency)}`}
-                    />
-                    {isActive ? (
-                        <circle
-                          r={radius - 1}
-                          cx="60"
-                          cy="60"
-                          fill="transparent"
-                        stroke="rgba(255,255,255,0.28)"
-                        strokeWidth="1.25"
-                        strokeDasharray={`${arc} ${circumference - arc}`}
-                        strokeDashoffset={offset}
-                        transform="rotate(-90 60 60)"
-                        pointerEvents="none"
-                      />
-                    ) : null}
-                    {segments.length > 1 ? (() => {
-                      const label = makeArcLabel(seg, index);
-                      return (
-                        <g pointerEvents="none">
-                          <polyline
-                            points={`${label.lineStart.x.toFixed(1)},${label.lineStart.y.toFixed(1)} ${label.elbow.x.toFixed(1)},${label.elbow.y.toFixed(1)} ${label.anchorX.toFixed(1)},${label.anchorY.toFixed(1)}`}
-                            fill="none"
-                            stroke={seg.donutColor}
-                            strokeWidth="1.2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            opacity={isActive ? 0.95 : 0.7}
-                          />
-                          <circle cx={label.anchorX} cy={label.anchorY} r="1.8" fill={seg.donutColor} opacity={isActive ? 1 : 0.8} />
-                          <text
-                            x={label.labelX}
-                            y={label.labelY - 1.8}
-                            textAnchor={label.textAnchor}
-                            className="fill-foreground"
-                            style={{ fontSize: "6px", fontWeight: 600 }}
-                          >
-                            {seg.row.name}
-                          </text>
-                          <text
-                            x={label.labelX}
-                            y={label.labelY + 4.2}
-                            textAnchor={label.textAnchor}
-                            className="fill-muted-foreground"
-                            style={{ fontSize: "5px", fontWeight: 500 }}
-                          >
-                            {label.displayPct}%
-                          </text>
-                        </g>
-                      );
-                    })() : null}
-                  </g>
-                );
-              })}
-            </svg>
-            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center rounded-full">
-              <div className="text-[10px] uppercase tracking-[0.24em] text-muted-foreground">Total</div>
-              <div className="mt-1 px-3 text-center text-sm font-semibold tabular-nums text-foreground">
-                {activeSegment ? formatMoney(activeSegment.row[valueKey], currency) : formatMoney(total, currency)}
-              </div>
-              <div className="mt-0.5 max-w-[8rem] truncate text-center text-[10px] text-muted-foreground">
-                {activeSegment ? activeSegment.row.name : "Select a segment"}
-              </div>
-            </div>
-          </div>
-          <ul className="w-full flex-1 space-y-1.5 overflow-y-auto max-h-44 pr-1 text-[10px] sm:max-h-48">
-            {segments.map((seg) => (
-              <li key={seg.row.name}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveIndex(segments.findIndex((candidate) => candidate.row.name === seg.row.name));
-                    onBarTap(seg.row);
-                  }}
-                  onMouseEnter={() => setActiveIndex(segments.findIndex((candidate) => candidate.row.name === seg.row.name))}
-                  className={cn(
-                    "flex w-full items-center justify-between rounded-sm px-1 py-0.5 text-left transition hover:bg-muted/50",
-                    seg.row.name === activeSegment?.row.name && "bg-muted/70",
-                  )}
-                >
-                  <span className="flex min-w-0 items-center gap-1.5 truncate font-medium text-foreground">
-                    <span className="h-2.5 w-2.5 shrink-0 rounded-full shadow-sm" style={{ backgroundColor: seg.donutColor }} />
-                    {seg.row.icon ? <img src={seg.row.icon} className="h-3 w-3 rounded-sm object-cover" alt="" /> : null}
-                    <span className="truncate">{seg.row.name}</span>
-                  </span>
-                  <span className="shrink-0 ml-2 font-medium text-muted-foreground">
-                    {Math.round(seg.pct)}%
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
+function flowTone(index: number): string {
+  return FLOW_TONES[index % FLOW_TONES.length]!;
 }
 
 function DrillBucketGrid({
@@ -458,8 +142,8 @@ function DrillBucketGrid({
     flow === "in" ? bucket.inCents : flow === "out" ? bucket.outCents : bucket.outCents + bucket.inCents;
 
   return (
-    <div className="mt-4 space-y-3">
-      <div className="grid gap-2 sm:grid-cols-2">
+    <div className="mt-4 space-y-2">
+      <div className="divide-y divide-border/70">
         {buckets.map((bucket) => {
           const amount = getAmount(bucket);
           const label = bucket.label;
@@ -468,38 +152,29 @@ function DrillBucketGrid({
               key={bucket.key}
               type="button"
               onClick={() => onSelect({ key: bucket.key, periodStart: bucket.periodStart })}
-              className="rounded-xl border bg-card px-3 py-3 text-left ring-offset-background transition hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+              className="flex w-full items-start justify-between gap-3 py-3.5 text-left transition hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-foreground">{label}</div>
-                  <div className="mt-0.5 text-[11px] text-muted-foreground">{bucket.transactionCount} transactions</div>
-                </div>
-                <div className="shrink-0 text-right">
-                  <div className="text-sm font-semibold tabular-nums text-foreground">{formatMoney(amount, currency)}</div>
-                  {flow === "all" ? (
-                    <div className="mt-0.5 text-[10px] text-muted-foreground">
-                      {formatMoney(bucket.inCents, currency)} in · {formatMoney(bucket.outCents, currency)} out
-                    </div>
-                  ) : null}
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-foreground">{label}</div>
+                <div className="mt-0.5 text-[11px] text-muted-foreground">
+                  {bucket.transactionCount} transactions
                 </div>
               </div>
-              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
-                <div
-                  className={cn(
-                    "h-full rounded-full",
-                    flow === "in" ? "bg-emerald-500" : flow === "out" ? "bg-red-500" : "bg-primary",
-                  )}
-                  style={{ width: "100%" }}
-                />
+              <div className="shrink-0 text-right">
+                <div className="text-sm font-semibold tabular-nums text-foreground">
+                  {formatMoney(amount, currency)}
+                </div>
+                {flow === "all" ? (
+                  <div className="mt-0.5 text-[10px] text-muted-foreground">
+                    {formatMoney(bucket.inCents, currency)} in · {formatMoney(bucket.outCents, currency)} out
+                  </div>
+                ) : null}
               </div>
             </button>
           );
         })}
       </div>
-      <p className="text-[10px] text-muted-foreground">
-        Tap a {modeLabel} bucket to drill deeper.
-      </p>
+      <p className="text-[10px] text-muted-foreground">Tap a {modeLabel} to go deeper.</p>
     </div>
   );
 }
@@ -564,60 +239,82 @@ function DashboardAiAssistant({ dashboardData }: { dashboardData: Extract<Ledger
   }
 
   return (
-    <div className="mt-6 flex flex-col rounded-xl border bg-muted/20 overflow-hidden shadow-sm">
-      <div className="flex items-center gap-2 bg-muted/40 px-3 py-2 text-xs font-semibold text-foreground border-b">
-        <Sparkles className="h-4 w-4 text-primary" />
-        Analytics AI Assistant
+    <section className="mt-2 border-t border-teal-900/10 pt-6 dark:border-teal-100/10">
+      <div className="flex items-center gap-2">
+        <Sparkles className="h-4 w-4 text-teal-700 dark:text-teal-300" />
+        <h3 className="text-sm font-semibold text-foreground">Ask this view</h3>
       </div>
-      <div 
+      <p className="mt-1 text-[11px] text-muted-foreground">
+        Summaries, trends, or advice — scoped to the numbers above.
+      </p>
+      <div
         ref={chatRef}
-        className="flex-1 overflow-y-auto p-3 space-y-3 min-h-[100px] max-h-[300px] text-xs"
+        className="mt-3 max-h-[280px] min-h-[88px] space-y-3 overflow-y-auto"
       >
         {chatHistory.length === 0 ? (
-          <p className="text-muted-foreground text-[11px] text-center italic py-4">
-            Ask me to summarize your spending, identify trends, or give you advice based on your current view!
+          <p className="py-3 text-[11px] text-muted-foreground">
+            Try “Where am I overspending?” or “Summarize this period.”
           </p>
         ) : (
           chatHistory.map((msg, i) => (
-            <div key={i} className={cn("flex flex-col max-w-[85%]", msg.role === "user" ? "ml-auto items-end" : "mr-auto items-start")}>
-              <span className={cn("px-3 py-2 rounded-2xl whitespace-pre-wrap", msg.role === "user" ? "bg-primary text-primary-foreground rounded-tr-sm" : "bg-muted text-foreground rounded-tl-sm")}>
+            <div
+              key={i}
+              className={cn(
+                "flex max-w-[88%] flex-col text-xs",
+                msg.role === "user" ? "ml-auto items-end" : "mr-auto items-start",
+              )}
+            >
+              <span
+                className={cn(
+                  "whitespace-pre-wrap px-3 py-2",
+                  msg.role === "user"
+                    ? "rounded-2xl rounded-tr-md bg-teal-800 text-teal-50 dark:bg-teal-700"
+                    : "rounded-2xl rounded-tl-md bg-muted text-foreground",
+                )}
+              >
                 {msg.content}
               </span>
             </div>
           ))
         )}
-        {isChatting && (
-          <div className="mr-auto items-start max-w-[85%]">
-            <span className="px-3 py-2 rounded-2xl bg-muted rounded-tl-sm flex items-center gap-2">
+        {isChatting ? (
+          <div className="mr-auto flex max-w-[85%] items-start">
+            <span className="flex items-center gap-2 rounded-2xl rounded-tl-md bg-muted px-3 py-2">
               <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
             </span>
           </div>
-        )}
+        ) : null}
       </div>
-      <form onSubmit={handleSubmit} className="flex gap-2 p-2 border-t bg-background">
-        <Input 
-          placeholder="Ask about your analytics..." 
-          value={input} 
-          onChange={e => setInput(e.target.value)} 
+      <form onSubmit={handleSubmit} className="mt-3 flex items-center gap-2 border-b border-teal-900/15 pb-1 dark:border-teal-100/15">
+        <Input
+          placeholder="Ask about this period…"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
           disabled={isChatting}
-          className="h-9 text-xs flex-1 border-none shadow-none focus-visible:ring-0 px-2 bg-transparent"
+          className="h-10 flex-1 border-none bg-transparent px-0 text-sm shadow-none focus-visible:ring-0"
         />
-        <Button type="submit" size="sm" variant="ghost" disabled={!input.trim() || isChatting} className="h-9 w-9 p-0 shrink-0 text-primary hover:text-primary/80">
+        <Button
+          type="submit"
+          size="sm"
+          variant="ghost"
+          disabled={!input.trim() || isChatting}
+          className="h-9 w-9 shrink-0 p-0 text-teal-800 hover:text-teal-700 dark:text-teal-300"
+        >
           <Send className="h-4 w-4" />
         </Button>
       </form>
-    </div>
+    </section>
   );
 }
 
 export function DashboardInsights({
-  range,
-  onRangeChange,
+  period,
+  onPeriodChange,
   data,
   loading,
 }: {
-  range: DashboardRange;
-  onRangeChange: (r: DashboardRange) => void;
+  period: MoneyStoryPeriod;
+  onPeriodChange: (period: MoneyStoryPeriod) => void;
   data: Extract<LedgerDashboardResult, { ok: true }> | null;
   loading: boolean;
 }) {
@@ -626,6 +323,40 @@ export function DashboardInsights({
   const [drillError, setDrillError] = useState<string | null>(null);
   const [drillPending, startDrill] = useTransition();
   const [selectedTxId, setSelectedTxId] = useState<string | null>(null);
+  const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  const movePeriod = useCallback(
+    (amount: -1 | 1) => {
+      if (amount === 1 && !canMoveMoneyStoryPeriodForward(period)) return;
+      onPeriodChange(shiftMoneyStoryPeriod(period, amount));
+    },
+    [onPeriodChange, period],
+  );
+
+  const setViewMode = (mode: MoneyStoryViewMode) => {
+    if (mode === period.mode) return;
+    onPeriodChange({ ...period, mode });
+  };
+
+  const handleTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    if ((event.target as Element).closest("button, input, textarea, select, a")) {
+      swipeStartRef.current = null;
+      return;
+    }
+    const touch = event.touches[0];
+    if (touch) swipeStartRef.current = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const handleTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
+    const start = swipeStartRef.current;
+    swipeStartRef.current = null;
+    const touch = event.changedTouches[0];
+    if (!start || !touch) return;
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    if (Math.abs(dx) < 55 || Math.abs(dx) < Math.abs(dy) * 1.25) return;
+    movePeriod(dx < 0 ? 1 : -1);
+  };
 
   const loadDrill = useCallback(
     (sel: DrillSelection) => {
@@ -634,7 +365,13 @@ export function DashboardInsights({
       setDrillError(null);
       startDrill(() => {
         void (async () => {
-          const base = { range, flow: sel.flow } as const;
+          const base = {
+            range: data?.range ?? (period.mode === "month" ? "month" : "all"),
+            ...(data?.fromIso ? { fromIso: data.fromIso } : {}),
+            ...(data?.toIso ? { toIso: data.toIso } : {}),
+            ...(data?.rangeLabel ? { label: data.rangeLabel } : {}),
+            flow: sel.flow,
+          } as const;
           let payload: Parameters<typeof getLedgerDashboardDrilldownAction>[0];
           if (sel.lens === "overview") {
             payload = { ...base, lens: "overview" };
@@ -685,14 +422,14 @@ export function DashboardInsights({
         })();
       });
     },
-    [range],
+    [data?.fromIso, data?.range, data?.rangeLabel, data?.toIso, period.mode],
   );
 
   useEffect(() => {
     setDrill(null);
     setDrillData(null);
     setDrillError(null);
-  }, [range]);
+  }, [period.mode, period.month, period.year]);
 
   const closeDrill = () => {
     setDrill(null);
@@ -775,301 +512,618 @@ export function DashboardInsights({
     }
   };
 
-  return (
-    <div className="space-y-4 text-sm">
-      <p className="text-xs leading-relaxed text-muted-foreground">
-        Snapshot of your ledger. Totals use your <span className="font-medium text-foreground">primary currency</span>{" "}
-        only (same as chat); other currencies are excluded from these sums.
-      </p>
+  const income = data?.totals.incomeCents ?? 0;
+  const expense = data?.totals.expenseCents ?? 0;
+  const net = data?.totals.netCents ?? 0;
+  const spendRatio = income > 0 ? Math.min(1, expense / income) : expense > 0 ? 1 : 0;
+  const savedPct = income > 0 ? Math.round(((income - expense) / income) * 100) : null;
+  const spendingCategories = (data?.byCategory ?? [])
+    .filter((row) => row.expenseCents > 0)
+    .sort((a, b) => b.expenseCents - a.expenseCents);
+  const incomeCategories = (data?.byCategory ?? [])
+    .filter((row) => row.incomeCents > 0)
+    .sort((a, b) => b.incomeCents - a.incomeCents);
+  const spendingTotal = spendingCategories.reduce((sum, row) => sum + row.expenseCents, 0);
+  const topMerchantSpend = data?.topMerchants[0]?.expenseCents ?? 0;
 
-      <div className="flex flex-wrap gap-1.5">
-        {(
-          [
-            ["30d", "30 days"],
-            ["month", "This month"],
-            ["all", "All time"],
-          ] as const
-        ).map(([id, label]) => (
-          <Button
-            key={id}
-            type="button"
-            size="sm"
-            variant={range === id ? "secondary" : "outline"}
-            className="text-xs"
-            onClick={() => onRangeChange(id)}
-          >
-            {label}
-          </Button>
-        ))}
+  const remainCents = Math.max(0, income - expense);
+  const flowDenom = Math.max(income, expense, 1);
+  const incomeShare = Math.round((income / flowDenom) * 100);
+  const expenseShare = Math.round((expense / flowDenom) * 100);
+  const remainShare = income > 0 ? Math.round((remainCents / income) * 100) : 0;
+
+  return (
+    <div
+      className="space-y-8 touch-pan-y text-sm"
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+    >
+      <div className="sticky top-0 z-10 -mx-4 border-b border-teal-900/10 bg-background/90 px-4 py-2 backdrop-blur dark:border-teal-100/10">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex rounded-lg bg-muted/70 p-0.5">
+            {(["month", "year"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setViewMode(mode)}
+                aria-pressed={period.mode === mode}
+                className={cn(
+                  "rounded-md px-2.5 py-1.5 text-xs font-medium capitalize transition sm:px-3",
+                  period.mode === mode
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {mode}
+              </button>
+            ))}
+          </div>
+          <div className="flex min-w-0 items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              onClick={() => movePeriod(-1)}
+              aria-label={`Previous ${period.mode}`}
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <div className="min-w-[6.75rem] truncate text-center text-sm font-semibold tabular-nums sm:min-w-[8.5rem]">
+              {moneyStoryPeriodLabel(period)}
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              onClick={() => movePeriod(1)}
+              disabled={!canMoveMoneyStoryPeriodForward(period)}
+              aria-label={`Next ${period.mode}`}
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+        <p className="mt-1 text-right text-[10px] text-muted-foreground sm:hidden">Swipe to change {period.mode}</p>
       </div>
 
       {loading ? (
-        <p className="text-xs text-muted-foreground">Loading analytics…</p>
+        <div className="flex items-center gap-2 py-12 text-xs text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Composing your money story…
+        </div>
       ) : !data ? (
-        <p className="text-xs text-muted-foreground">Could not load dashboard.</p>
+        <p className="text-xs text-muted-foreground">Could not load analytics.</p>
       ) : (
-        <>
-          <AnimatePresence mode="wait">
-            {drill ? (
-              <motion.div
-                key="drill"
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -4 }}
-                className="rounded-xl border-2 border-primary/25 bg-card p-4 shadow-sm"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <h3 className="truncate text-base font-semibold leading-tight">
-                      {drillData?.title ?? "Details"}
-                    </h3>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">
-                      {drillData?.subtitle ?? "Loading…"}
-                    </p>
-                  </div>
-                  <Button type="button" variant="outline" size="sm" className="shrink-0 gap-1" onClick={handleDrillBack}>
-                    <ArrowLeft className="h-3.5 w-3.5" />
-                    Back
-                  </Button>
+        <AnimatePresence mode="wait">
+          {drill ? (
+            <motion.div
+              key="drill"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              className="space-y-4"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-teal-800/70 dark:text-teal-200/70">
+                    Drill-down
+                  </p>
+                  <h3 className="mt-1 truncate text-xl font-semibold tracking-tight">
+                    {drillData?.title ?? "Details"}
+                  </h3>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    {drillData?.subtitle ?? "Loading…"}
+                  </p>
                 </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="shrink-0 gap-1 text-teal-800 dark:text-teal-300"
+                  onClick={handleDrillBack}
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" />
+                  Back
+                </Button>
+              </div>
 
-                {drillPending ? (
-                  <div className="mt-6 flex items-center gap-2 text-xs text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Loading detail…
-                  </div>
-                ) : drillError ? (
-                  <p className="mt-4 text-sm text-destructive">{drillError}</p>
-                ) : drillData ? (
-                  <>
-                    {drill.lens === "category" ? (
-                      <>
-                        <div className="rounded-xl border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
-                          {drill.level === "year"
-                            ? "Tap a year to narrow to months."
-                            : drill.level === "month"
-                              ? "Tap a month to narrow to weeks."
-                              : drill.level === "week"
-                                ? "Tap a week to open transactions."
-                                : "Transactions for the selected week."}
-                        </div>
-                        <DrillBucketGrid
-                          buckets={drillData.buckets}
-                          flow={drill.flow}
-                          currency={data.displayCurrency}
-                          level={drill.level}
-                          onSelect={handleCategoryBucketSelect}
-                          modeLabel={drill.level}
-                        />
-                        {drill.level === "transaction" ? (
-                          <div className="mt-5 border-t pt-3">
-                            <div className="text-xs font-medium text-foreground">Transactions</div>
-                            <ul className="mt-2 max-h-56 space-y-2 overflow-y-auto text-[11px]">
-                              {drillData.transactions.length === 0 ? (
-                                <li className="text-muted-foreground">No transactions match this slice.</li>
-                              ) : (
-                                drillData.transactions.map((t) => (
-                                  <li
-                                    key={t.id}
-                                    className="flex cursor-pointer flex-col gap-0.5 rounded-md border bg-muted/20 px-2 py-1.5 transition hover:bg-muted/50 active:scale-[0.99]"
-                                    onClick={() => setSelectedTxId(t.id)}
-                                    role="button"
-                                    tabIndex={0}
-                                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setSelectedTxId(t.id); }}
-                                    aria-label={`Edit transaction: ${t.merchant ?? t.memo ?? "entry"}`}
-                                  >
-                                    <div className="flex justify-between gap-2">
-                                      <span className="font-medium text-foreground">
-                                        {t.direction === "out" ? "Out" : "In"} · {formatMoney(t.amountCents, data.displayCurrency)}
-                                      </span>
-                                      <span className="shrink-0 text-muted-foreground">
-                                        {t.occurredAt.slice(0, 10)}
-                                      </span>
-                                    </div>
-                                    <div className="text-muted-foreground">
-                                      {t.walletName} · {t.categoryName}
-                                    </div>
-                                    {(t.merchant || t.memo) && (
-                                      <div className="truncate text-muted-foreground">{t.merchant ?? t.memo}</div>
-                                    )}
-                                  </li>
-                                ))
-                              )}
-                            </ul>
-                          </div>
-                        ) : null}
-                      </>
-                    ) : (
-                      <>
-                        <SeriesChart series={drillData.series} currency={data.displayCurrency} />
-                        <div className="mt-5 border-t pt-3">
-                          <div className="text-xs font-medium text-foreground">Recent lines</div>
-                          <ul className="mt-2 max-h-56 space-y-2 overflow-y-auto text-[11px]">
+              {drillPending ? (
+                <div className="flex items-center gap-2 py-8 text-xs text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading detail…
+                </div>
+              ) : drillError ? (
+                <p className="text-sm text-destructive">{drillError}</p>
+              ) : drillData ? (
+                <>
+                  {drill.lens === "category" ? (
+                    <>
+                      <p className="text-[11px] text-muted-foreground">
+                        {drill.level === "year"
+                          ? "Choose a year, then month, then week."
+                          : drill.level === "month"
+                            ? "Choose a month to see weeks."
+                            : drill.level === "week"
+                              ? "Choose a week to open transactions."
+                              : "Transactions in this week."}
+                      </p>
+                      <DrillBucketGrid
+                        buckets={drillData.buckets}
+                        flow={drill.flow}
+                        currency={data.displayCurrency}
+                        level={drill.level}
+                        onSelect={handleCategoryBucketSelect}
+                        modeLabel={drill.level}
+                      />
+                      {drill.level === "transaction" ? (
+                        <div className="border-t border-teal-900/10 pt-4 dark:border-teal-100/10">
+                          <div className="text-xs font-semibold text-foreground">Transactions</div>
+                          <ul className="mt-2 max-h-56 space-y-0 overflow-y-auto text-[11px]">
                             {drillData.transactions.length === 0 ? (
-                              <li className="text-muted-foreground">No transactions match this slice.</li>
+                              <li className="py-3 text-muted-foreground">No transactions match this slice.</li>
                             ) : (
                               drillData.transactions.map((t) => (
                                 <li
                                   key={t.id}
-                                  className="flex cursor-pointer flex-col gap-0.5 rounded-md border bg-muted/20 px-2 py-1.5 transition hover:bg-muted/50 active:scale-[0.99]"
+                                  className="cursor-pointer border-b border-border/60 py-3 transition hover:bg-muted/40 active:scale-[0.99]"
                                   onClick={() => setSelectedTxId(t.id)}
                                   role="button"
                                   tabIndex={0}
-                                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setSelectedTxId(t.id); }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") setSelectedTxId(t.id);
+                                  }}
                                   aria-label={`Edit transaction: ${t.merchant ?? t.memo ?? "entry"}`}
                                 >
                                   <div className="flex justify-between gap-2">
                                     <span className="font-medium text-foreground">
-                                      {t.direction === "out" ? "Out" : "In"} · {formatMoney(t.amountCents, data.displayCurrency)}
+                                      {t.direction === "out" ? "Out" : "In"} ·{" "}
+                                      {formatMoney(t.amountCents, data.displayCurrency)}
                                     </span>
                                     <span className="shrink-0 text-muted-foreground">
                                       {t.occurredAt.slice(0, 10)}
                                     </span>
                                   </div>
-                                  <div className="text-muted-foreground">
+                                  <div className="mt-0.5 text-muted-foreground">
                                     {t.walletName} · {t.categoryName}
                                   </div>
-                                  {(t.merchant || t.memo) && (
+                                  {t.merchant || t.memo ? (
                                     <div className="truncate text-muted-foreground">{t.merchant ?? t.memo}</div>
-                                  )}
+                                  ) : null}
                                 </li>
                               ))
                             )}
                           </ul>
                         </div>
-                      </>
-                    )}
-                  </>
-                ) : null}
-              </motion.div>
-            ) : (
-              <motion.div key="summary" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                <div className="rounded-xl border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
-                  {data.rangeLabel}
-                  {data.fromIso ? ` · from ${data.fromIso.slice(0, 10)}` : null}
-                </div>
-
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => loadDrill({ lens: "overview", flow: "out" })}
-                    className="rounded-xl border border-red-200 bg-red-50/60 p-3 text-left ring-offset-background transition hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 dark:border-red-900/40 dark:bg-red-950/20 dark:hover:bg-red-950/30"
-                  >
-                    <div className="text-[11px] text-muted-foreground">Money out · tap</div>
-                    <div className="mt-1 text-lg font-semibold tabular-nums text-red-600 dark:text-red-400">
-                      {formatMoney(data.totals.expenseCents, data.displayCurrency)}
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => loadDrill({ lens: "overview", flow: "in" })}
-                    className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 text-left ring-offset-background transition hover:bg-emerald-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:hover:bg-emerald-950/30"
-                  >
-                    <div className="text-[11px] text-muted-foreground">Money in · tap</div>
-                    <div className="mt-1 text-lg font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
-                      {formatMoney(data.totals.incomeCents, data.displayCurrency)}
-                    </div>
-                  </button>
-                </div>
-
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      <SeriesChart series={drillData.series} currency={data.displayCurrency} />
+                      <div className="border-t border-teal-900/10 pt-4 dark:border-teal-100/10">
+                        <div className="text-xs font-semibold text-foreground">Recent lines</div>
+                        <ul className="mt-2 max-h-56 space-y-0 overflow-y-auto text-[11px]">
+                          {drillData.transactions.length === 0 ? (
+                            <li className="py-3 text-muted-foreground">No transactions match this slice.</li>
+                          ) : (
+                            drillData.transactions.map((t) => (
+                              <li
+                                key={t.id}
+                                className="cursor-pointer border-b border-border/60 py-3 transition hover:bg-muted/40 active:scale-[0.99]"
+                                onClick={() => setSelectedTxId(t.id)}
+                                role="button"
+                                tabIndex={0}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" || e.key === " ") setSelectedTxId(t.id);
+                                }}
+                                aria-label={`Edit transaction: ${t.merchant ?? t.memo ?? "entry"}`}
+                              >
+                                <div className="flex justify-between gap-2">
+                                  <span className="font-medium text-foreground">
+                                    {t.direction === "out" ? "Out" : "In"} ·{" "}
+                                    {formatMoney(t.amountCents, data.displayCurrency)}
+                                  </span>
+                                  <span className="shrink-0 text-muted-foreground">
+                                    {t.occurredAt.slice(0, 10)}
+                                  </span>
+                                </div>
+                                <div className="mt-0.5 text-muted-foreground">
+                                  {t.walletName} · {t.categoryName}
+                                </div>
+                                {t.merchant || t.memo ? (
+                                  <div className="truncate text-muted-foreground">{t.merchant ?? t.memo}</div>
+                                ) : null}
+                              </li>
+                            ))
+                          )}
+                        </ul>
+                      </div>
+                    </>
+                  )}
+                </>
+              ) : null}
+            </motion.div>
+          ) : (
+            <motion.div
+              key="summary"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="space-y-10"
+            >
+              {/* Hero: typographic net + flow tracks */}
+              <section>
                 <button
                   type="button"
                   onClick={() => loadDrill({ lens: "overview", flow: "all" })}
-                  className={cn(
-                    "mt-2 w-full rounded-xl border p-3 text-left ring-offset-background transition hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
-                    data.totals.netCents >= 0
-                      ? "border-emerald-200 bg-emerald-50/50 dark:border-emerald-900/40 dark:bg-emerald-950/20"
-                      : "border-amber-200 bg-amber-50/50 dark:border-amber-900/40 dark:bg-amber-950/20",
-                  )}
+                  className="w-full text-left"
                 >
-                  <div className="text-[11px] font-medium text-muted-foreground">Net (in − out) · tap for full trend</div>
-                  <div className="mt-1 text-xl font-semibold tabular-nums">
-                    {formatMoney(data.totals.netCents, data.displayCurrency)}
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-                    <span>{data.totals.transactionCount} lines</span>
-                    {data.totals.pendingCount > 0 ? (
-                      <span className="text-amber-800 dark:text-amber-200">
-                        {data.totals.pendingCount} awaiting confirm
-                      </span>
-                    ) : null}
-                  </div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                    {data.rangeLabel} · {data.displayCurrency}
+                  </p>
+                  <motion.p
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.35 }}
+                    className={cn(
+                      "mt-2 text-4xl font-semibold tracking-tight tabular-nums sm:text-5xl",
+                      net >= 0 ? "text-teal-800 dark:text-teal-300" : "text-rose-700 dark:text-rose-400",
+                    )}
+                  >
+                    {net >= 0 ? "+" : "−"}
+                    {formatMoney(Math.abs(net), data.displayCurrency)}
+                  </motion.p>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {savedPct == null
+                      ? `${data.totals.transactionCount} transactions`
+                      : savedPct >= 0
+                        ? `${savedPct}% of income still with you · ${data.totals.transactionCount} moves`
+                        : `${Math.abs(savedPct)}% over income · ${data.totals.transactionCount} moves`}
+                    {data.totals.pendingCount > 0 ? ` · ${data.totals.pendingCount} pending` : ""}
+                  </p>
                 </button>
 
-                <div className="mt-4 space-y-4">
-                  <InteractiveChartBlock<CategoryRow>
-                    title="Spending by category"
-                    rows={data.byCategory}
-                    currency={data.displayCurrency}
-                    valueKey="expenseCents"
-                    enableCircleChart
-                    onBarTap={(row) =>
-                      loadDrill({ lens: "category", categoryId: row.categoryId, name: row.name, flow: "out", level: "year" })
-                    }
-                  />
-                  <InteractiveChartBlock<CategoryRow>
-                    title="Income by category"
-                    rows={data.byCategory}
-                    currency={data.displayCurrency}
-                    valueKey="incomeCents"
-                    enableCircleChart
-                    onBarTap={(row) =>
-                      loadDrill({ lens: "category", categoryId: row.categoryId, name: row.name, flow: "in", level: "year" })
-                    }
-                  />
+                <div className="mt-6 space-y-3">
+                  <button
+                    type="button"
+                    onClick={() => loadDrill({ lens: "overview", flow: "in" })}
+                    className="group w-full text-left"
+                  >
+                    <div className="mb-1.5 flex items-baseline justify-between gap-3">
+                      <span className="text-[11px] font-medium uppercase tracking-[0.16em] text-teal-800/80 dark:text-teal-200/80">
+                        In
+                      </span>
+                      <span className="text-sm font-semibold tabular-nums text-foreground group-hover:text-teal-800 dark:group-hover:text-teal-300">
+                        {formatMoney(income, data.displayCurrency)}
+                      </span>
+                    </div>
+                    <div className="h-3 overflow-hidden bg-teal-900/10 dark:bg-teal-100/10">
+                      <motion.div
+                        initial={{ width: 0 }}
+                        animate={{ width: `${Math.max(income > 0 ? 6 : 0, incomeShare)}%` }}
+                        transition={{ duration: 0.55, ease: "easeOut" }}
+                        className="h-full bg-teal-700 dark:bg-teal-400"
+                      />
+                    </div>
+                  </button>
 
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <InteractiveChartBlock<WalletRow>
-                      title="Outflows by wallet"
-                      rows={data.byWallet}
-                      currency={data.displayCurrency}
-                      valueKey="expenseCents"
-                      onBarTap={(row) =>
-                        loadDrill({ lens: "wallet", walletId: row.walletId, name: row.name, flow: "out" })
-                      }
-                    />
-                    <InteractiveChartBlock<WalletRow>
-                      title="Inflows by wallet"
-                      rows={data.byWallet}
-                      currency={data.displayCurrency}
-                      valueKey="incomeCents"
-                      onBarTap={(row) =>
-                        loadDrill({ lens: "wallet", walletId: row.walletId, name: row.name, flow: "in" })
-                      }
-                    />
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => loadDrill({ lens: "overview", flow: "out" })}
+                    className="group w-full text-left"
+                  >
+                    <div className="mb-1.5 flex items-baseline justify-between gap-3">
+                      <span className="text-[11px] font-medium uppercase tracking-[0.16em] text-rose-800/80 dark:text-rose-200/80">
+                        Out
+                      </span>
+                      <span className="text-sm font-semibold tabular-nums text-foreground group-hover:text-rose-700 dark:group-hover:text-rose-300">
+                        {formatMoney(expense, data.displayCurrency)}
+                      </span>
+                    </div>
+                    <div className="h-3 overflow-hidden bg-rose-900/10 dark:bg-rose-100/10">
+                      <motion.div
+                        initial={{ width: 0 }}
+                        animate={{ width: `${Math.max(expense > 0 ? 6 : 0, expenseShare)}%` }}
+                        transition={{ duration: 0.55, ease: "easeOut", delay: 0.08 }}
+                        className={cn(
+                          "h-full",
+                          spendRatio > 0.85 ? "bg-rose-600 dark:bg-rose-400" : "bg-rose-500/90 dark:bg-rose-500",
+                        )}
+                      />
+                    </div>
+                  </button>
 
-                  {data.topMerchants.length > 0 ? (
-                    <div className="rounded-xl border bg-card px-3 py-3">
-                      <div className="text-xs font-medium text-foreground">Top payees (spend)</div>
-                      <p className="mt-1 text-[10px] text-muted-foreground">Tap a row for merchant detail.</p>
-                      <ol className="mt-2 space-y-1.5 text-xs">
-                        {data.topMerchants.map((m, i) => (
-                          <li key={m.label}>
-                            <button
-                              type="button"
-                              onClick={() => loadDrill({ lens: "merchant", merchant: m.label, flow: "out" })}
-                              className="flex w-full justify-between gap-2 rounded-md px-1 py-1.5 text-left ring-offset-background transition hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
-                            >
-                              <span className="min-w-0 text-muted-foreground">
-                                {i + 1}. <span className="font-medium text-foreground">{m.label}</span>
-                              </span>
-                              <span className="shrink-0 tabular-nums text-muted-foreground">
-                                {formatMoney(m.expenseCents, data.displayCurrency)}
-                              </span>
-                            </button>
-                          </li>
-                        ))}
-                      </ol>
+                  {income > 0 ? (
+                    <div>
+                      <div className="mb-1.5 flex items-baseline justify-between gap-3">
+                        <span className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                          Left
+                        </span>
+                        <span className="text-sm font-semibold tabular-nums text-foreground">
+                          {formatMoney(remainCents, data.displayCurrency)}
+                          <span className="ml-1.5 text-[11px] font-medium text-muted-foreground">
+                            {remainShare}%
+                          </span>
+                        </span>
+                      </div>
+                      <div className="h-1.5 overflow-hidden bg-muted">
+                        <motion.div
+                          initial={{ width: 0 }}
+                          animate={{ width: `${Math.max(net > 0 ? 4 : 0, remainShare)}%` }}
+                          transition={{ duration: 0.55, ease: "easeOut", delay: 0.14 }}
+                          className="h-full bg-foreground/35"
+                        />
+                      </div>
                     </div>
                   ) : null}
                 </div>
+              </section>
 
-                <DashboardAiAssistant dashboardData={data} />
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </>
+              {/* Spend mosaic */}
+              <section>
+                <div className="flex items-end justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-semibold tracking-tight text-foreground">Where it went</h2>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">Tap a slice to drill in</p>
+                  </div>
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {formatMoney(expense, data.displayCurrency)}
+                  </span>
+                </div>
+
+                {spendingCategories.length === 0 ? (
+                  <p className="mt-6 text-xs text-muted-foreground">No spending in this period yet.</p>
+                ) : (
+                  <>
+                    <div className="mt-4 flex h-14 w-full overflow-hidden">
+                      {spendingCategories.slice(0, 8).map((row, index) => {
+                        const pct = spendingTotal > 0 ? (row.expenseCents / spendingTotal) * 100 : 0;
+                        return (
+                          <button
+                            key={row.categoryId ?? row.name}
+                            type="button"
+                            title={`${row.name} · ${Math.round(pct)}%`}
+                            onClick={() =>
+                              loadDrill({
+                                lens: "category",
+                                categoryId: row.categoryId,
+                                name: row.name,
+                                flow: "out",
+                                level: "year",
+                              })
+                            }
+                            className="min-w-[4%] transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            style={{
+                              width: `${Math.max(4, pct)}%`,
+                              backgroundColor: flowTone(index),
+                            }}
+                          />
+                        );
+                      })}
+                    </div>
+
+                    <ul className="mt-5 divide-y divide-border/70">
+                      {spendingCategories.slice(0, 7).map((row, index) => {
+                        const pct = spendingTotal > 0 ? Math.round((row.expenseCents / spendingTotal) * 100) : 0;
+                        return (
+                          <li key={row.categoryId ?? row.name}>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                loadDrill({
+                                  lens: "category",
+                                  categoryId: row.categoryId,
+                                  name: row.name,
+                                  flow: "out",
+                                  level: "year",
+                                })
+                              }
+                              className="flex w-full items-center gap-3 py-3 text-left transition hover:bg-muted/40"
+                            >
+                              <span
+                                className="h-8 w-1.5 shrink-0"
+                                style={{ backgroundColor: flowTone(index) }}
+                              />
+                              <span className="min-w-0 flex-1">
+                                <span className="flex items-center gap-2">
+                                  {row.icon ? (
+                                    <img src={row.icon} alt="" className="h-4 w-4 rounded-sm object-cover" />
+                                  ) : null}
+                                  <span className="truncate text-sm font-medium text-foreground">{row.name}</span>
+                                </span>
+                                <span className="mt-0.5 block text-[11px] text-muted-foreground">{pct}% of spend</span>
+                              </span>
+                              <span className="shrink-0 text-sm font-semibold tabular-nums text-foreground">
+                                {formatMoney(row.expenseCents, data.displayCurrency)}
+                              </span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </>
+                )}
+              </section>
+
+              {/* Income sources only — spend already covered by mosaic */}
+              {incomeCategories.length > 0 ? (
+                <section>
+                  <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-teal-800 dark:text-teal-300">
+                    Money in
+                  </h2>
+                  <ul className="mt-3 space-y-3">
+                    {incomeCategories.slice(0, 6).map((row) => {
+                      const pct = income > 0 ? Math.round((row.incomeCents / income) * 100) : 0;
+                      return (
+                        <li key={`in-${row.categoryId ?? row.name}`}>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              loadDrill({
+                                lens: "category",
+                                categoryId: row.categoryId,
+                                name: row.name,
+                                flow: "in",
+                                level: "year",
+                              })
+                            }
+                            className="w-full text-left transition hover:opacity-80"
+                          >
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="truncate text-xs font-medium text-foreground">{row.name}</span>
+                              <span className="shrink-0 text-xs font-semibold tabular-nums text-teal-800 dark:text-teal-300">
+                                {formatMoney(row.incomeCents, data.displayCurrency)}
+                              </span>
+                            </div>
+                            <div className="mt-1.5 h-1 overflow-hidden bg-teal-900/10 dark:bg-teal-100/10">
+                              <div
+                                className="h-full bg-teal-700 dark:bg-teal-400"
+                                style={{ width: `${Math.max(4, pct)}%` }}
+                              />
+                            </div>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              ) : null}
+
+              {/* Wallets as slim dual tracks */}
+              {data.byWallet.length > 0 ? (
+                <section>
+                  <h2 className="text-lg font-semibold tracking-tight text-foreground">Wallets</h2>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">Activity across accounts</p>
+                  <ul className="mt-4 space-y-5">
+                    {data.byWallet.map((wallet) => {
+                      const walletNet = wallet.incomeCents - wallet.expenseCents;
+                      const denom = Math.max(wallet.incomeCents, wallet.expenseCents, 1);
+                      return (
+                        <li key={wallet.walletId}>
+                          <div className="flex items-baseline justify-between gap-3">
+                            <span className="truncate text-sm font-medium text-foreground">{wallet.name}</span>
+                            <span
+                              className={cn(
+                                "shrink-0 text-xs font-semibold tabular-nums",
+                                walletNet >= 0
+                                  ? "text-teal-800 dark:text-teal-300"
+                                  : "text-rose-700 dark:text-rose-300",
+                              )}
+                            >
+                              {walletNet >= 0 ? "+" : "−"}
+                              {formatMoney(Math.abs(walletNet), data.displayCurrency)}
+                            </span>
+                          </div>
+                          <div className="mt-2 space-y-1">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                loadDrill({
+                                  lens: "wallet",
+                                  walletId: wallet.walletId,
+                                  name: wallet.name,
+                                  flow: "in",
+                                })
+                              }
+                              className="flex w-full items-center gap-2"
+                            >
+                              <span className="w-8 shrink-0 text-[10px] uppercase tracking-wide text-teal-800/70 dark:text-teal-200/70">
+                                In
+                              </span>
+                              <div className="h-2 flex-1 overflow-hidden bg-teal-900/10 dark:bg-teal-100/10">
+                                <div
+                                  className="h-full bg-teal-700 dark:bg-teal-400"
+                                  style={{
+                                    width: `${Math.max(
+                                      wallet.incomeCents > 0 ? 4 : 0,
+                                      Math.round((wallet.incomeCents / denom) * 100),
+                                    )}%`,
+                                  }}
+                                />
+                              </div>
+                              <span className="w-20 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground">
+                                {formatMoney(wallet.incomeCents, data.displayCurrency)}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                loadDrill({
+                                  lens: "wallet",
+                                  walletId: wallet.walletId,
+                                  name: wallet.name,
+                                  flow: "out",
+                                })
+                              }
+                              className="flex w-full items-center gap-2"
+                            >
+                              <span className="w-8 shrink-0 text-[10px] uppercase tracking-wide text-rose-800/70 dark:text-rose-200/70">
+                                Out
+                              </span>
+                              <div className="h-2 flex-1 overflow-hidden bg-rose-900/10 dark:bg-rose-100/10">
+                                <div
+                                  className="h-full bg-rose-500"
+                                  style={{
+                                    width: `${Math.max(
+                                      wallet.expenseCents > 0 ? 4 : 0,
+                                      Math.round((wallet.expenseCents / denom) * 100),
+                                    )}%`,
+                                  }}
+                                />
+                              </div>
+                              <span className="w-20 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground">
+                                {formatMoney(wallet.expenseCents, data.displayCurrency)}
+                              </span>
+                            </button>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              ) : null}
+
+              {/* Merchants ledger */}
+              {data.topMerchants.length > 0 ? (
+                <section>
+                  <h2 className="text-lg font-semibold tracking-tight text-foreground">Top places</h2>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">Largest spend destinations</p>
+                  <ol className="mt-4">
+                    {data.topMerchants.map((m, i) => {
+                      const pct = topMerchantSpend > 0 ? Math.round((m.expenseCents / topMerchantSpend) * 100) : 0;
+                      return (
+                        <li key={m.label} className="border-t border-border/70 first:border-t-0">
+                          <button
+                            type="button"
+                            onClick={() => loadDrill({ lens: "merchant", merchant: m.label, flow: "out" })}
+                            className="flex w-full items-center gap-3 py-3.5 text-left transition hover:bg-muted/40"
+                          >
+                            <span className="w-6 shrink-0 text-xs font-semibold tabular-nums text-muted-foreground">
+                              {String(i + 1).padStart(2, "0")}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-medium text-foreground">{m.label}</span>
+                              <span
+                                className="mt-2 block h-1 bg-rose-500/80"
+                                style={{ width: `${Math.max(8, pct)}%` }}
+                              />
+                            </span>
+                            <span className="shrink-0 text-sm font-semibold tabular-nums text-foreground">
+                              {formatMoney(m.expenseCents, data.displayCurrency)}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </section>
+              ) : null}
+
+              <DashboardAiAssistant dashboardData={data} />
+            </motion.div>
+          )}
+        </AnimatePresence>
       )}
 
       <TransactionDetailDrawer

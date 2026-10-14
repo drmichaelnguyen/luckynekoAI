@@ -77,6 +77,7 @@ const TransactionRow = z.object({
   source: z.string().min(1).max(64),
   importBatchId: z.string().nullable(),
   rawStructuredJson: z.string().nullable(),
+  originChatJson: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -96,6 +97,7 @@ const StoredMediaBackupRow = z.object({
   structuredExcerpt: z.string().max(8000).nullable(),
   pendingImportJson: z.string().max(500_000).nullable().optional(),
   trainingExampleJson: z.string().max(500_000).nullable().optional(),
+  originChatJson: z.string().max(700_000).nullable().optional(),
   markedForTraining: z.boolean().optional(),
   zipEntryPath: z.string().min(1).max(500),
 });
@@ -226,6 +228,7 @@ export async function buildLedgerBackupJson(
       source: t.source,
       importBatchId: t.importBatchId,
       rawStructuredJson: t.rawStructuredJson,
+      originChatJson: t.originChatJson,
       createdAt: t.createdAt.toISOString(),
       updatedAt: t.updatedAt.toISOString(),
     })),
@@ -280,6 +283,7 @@ export async function buildLedgerBackupZip(
       structuredExcerpt: m.structuredExcerpt,
       pendingImportJson: m.pendingImportJson,
       trainingExampleJson: m.trainingExampleJson,
+      originChatJson: m.originChatJson,
       markedForTraining: m.markedForTraining,
       zipEntryPath,
     };
@@ -501,6 +505,7 @@ export async function restoreLedgerBackupForUser(
           source: t.source,
           importBatchId: t.importBatchId,
           rawStructuredJson: t.rawStructuredJson,
+          originChatJson: t.originChatJson ?? null,
           createdAt: new Date(t.createdAt),
           updatedAt: new Date(t.updatedAt),
         })),
@@ -567,6 +572,7 @@ export async function restoreLedgerBackupForUser(
           structuredExcerpt: row.structuredExcerpt,
           pendingImportJson: row.pendingImportJson ?? null,
           trainingExampleJson: row.trainingExampleJson ?? null,
+          originChatJson: row.originChatJson ?? null,
           markedForTraining: row.markedForTraining ?? false,
           createdAt: new Date(row.createdAt),
         },

@@ -37,6 +37,9 @@ model User {
   passwordResetTokens PasswordResetToken[]
   aiRequestLogs    AiRequestLog[]
   replyFeedbacks   AssistantReplyFeedback[]
+  agentEvents      AgentEvent[]
+  agentRequestNonces AgentRequestNonce[]
+  agentIdempotencyKeys AgentIdempotencyKey[]
 }
 
 model AiRequestLog {
@@ -153,6 +156,8 @@ model StoredMedia {
   pendingImportJson String?
   /// Original vs user-corrected extraction bundle for optional training export (set on EDIT path).
   trainingExampleJson String?
+  /// Chat snapshot retained while a document import is awaiting confirmation and after it is saved.
+  originChatJson      String?
   /// True when user corrected extraction before saving (pairs with trainingExampleJson).
   markedForTraining   Boolean @default(false)
 
@@ -258,6 +263,8 @@ model Transaction {
   importBatchId     String?
   importBatch       ImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
   rawStructuredJson String?
+  /// Durable snapshot of the chat messages that led to this transaction, including the exact user input.
+  originChatJson    String?
   /// JSON array of edit snapshots: [{editedAt, before, after, editedBy}]
   editHistoryJson   String?
 
@@ -313,4 +320,42 @@ model ImportBatch {
   transactions Transaction[]
 
   @@index([userId])
+}
+
+model AgentEvent {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  eventType   String
+  sourceAgent String
+  traceId     String
+  payloadJson String?
+  status      String   @default("received")
+  createdAt   DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([traceId])
+  @@index([eventType, createdAt])
+}
+
+model AgentRequestNonce {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nonce      String   @unique
+  createdAt  DateTime @default(now())
+  expiresAt  DateTime
+}
+
+model AgentIdempotencyKey {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint      String
+  key           String
+  responseJson  String
+  createdAt     DateTime @default(now())
+
+  @@unique([userId, endpoint, key])
+  @@index([createdAt])
 }

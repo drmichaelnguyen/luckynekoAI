@@ -13,6 +13,8 @@ import {
 } from "@/lib/ai/model-router";
 import { recordAiRequestLog, usageFromGeminiResult, type AiUsageMetrics } from "@/lib/ai/telemetry";
 import { loadAdminRuntimeSettings, resolveProviderChoice } from "@/lib/admin-runtime-settings";
+import { majorToAmountCents } from "@/lib/finance/amount-cents";
+import { enrichReceiptWithLineItemCategories, resolveTransactionCategory } from "@/lib/finance/line-item-category";
 import { findOrCreateCategory } from "@/lib/finance/category-resolver";
 import { persistTransactionListLedgerEntries } from "@/lib/finance/persist-from-chat";
 import { persistPaystubLedgerEntry, persistReceiptLedgerEntry } from "@/lib/finance/persist-receipt-paystub";
@@ -259,6 +261,10 @@ export async function resolveDocumentImportAction(formData: FormData): Promise<R
     }
   }
 
+  if (pending.documentKind === "receipt") {
+    finalStructured = enrichReceiptWithLineItemCategories(finalStructured);
+  }
+
   // Apply learned merchant-category rules before persisting
   try {
     const patterns = await loadSpendingPatterns(prisma, session.user.id, {
@@ -279,9 +285,21 @@ export async function resolveDocumentImportAction(formData: FormData): Promise<R
 
   let persist: { saved: boolean; detail: string; transactionId?: string };
   if (pending.documentKind === "receipt") {
-    persist = await persistReceiptLedgerEntry(prisma, session.user.id, finalStructured, rawStructuredJson);
+    persist = await persistReceiptLedgerEntry(
+      prisma,
+      session.user.id,
+      finalStructured,
+      rawStructuredJson,
+      first.originChatJson,
+    );
   } else {
-    persist = await persistPaystubLedgerEntry(prisma, session.user.id, finalStructured, rawStructuredJson);
+    persist = await persistPaystubLedgerEntry(
+      prisma,
+      session.user.id,
+      finalStructured,
+      rawStructuredJson,
+      first.originChatJson,
+    );
   }
 
   if (!persist.saved) {
@@ -325,13 +343,24 @@ export async function persistReceiptSplitAction(
   const wallet = wallets.find((w) => w.isDefault) ?? wallets[0];
   if (!wallet) return { ok: false, message: "No wallet configured." };
 
+  const pendingMedia = await prisma.storedMedia.findFirst({
+    where: { userId: session.user.id, chatTurnId, pendingImportJson: { not: null } },
+    select: { pendingImportJson: true, originChatJson: true },
+  });
+  const originChatJson = pendingMedia?.originChatJson ?? null;
+
   const saved: string[] = [];
   for (const item of items) {
     if (!item.amount || item.amount <= 0) continue;
+    const categoryLabel = resolveTransactionCategory({
+      category: item.category,
+      merchant: null,
+      notes: item.description,
+    });
     const cat = await findOrCreateCategory({
       db: prisma,
       userId: session.user.id,
-      label: item.category,
+      label: categoryLabel,
       direction: item.direction,
       fallbackSlug: item.direction === "in" ? "income" : "other",
     });
@@ -340,7 +369,7 @@ export async function persistReceiptSplitAction(
         userId: session.user.id,
         walletId: wallet.id,
         categoryId: cat?.id ?? null,
-        amountCents: Math.round(Math.abs(item.amount) * 100),
+        amountCents: majorToAmountCents(item.amount, item.currency),
         direction: item.direction,
         currency: item.currency.toUpperCase(),
         merchant: null,
@@ -349,6 +378,11 @@ export async function persistReceiptSplitAction(
         recurrence: "one_time",
         status: "posted",
         source: "chat_receipt_split",
+        rawStructuredJson: JSON.stringify({
+          documentKind: "receipt_split",
+          transaction: item,
+        }),
+        originChatJson,
       },
     });
     saved.push(`${item.category}: ${item.currency} ${item.amount.toFixed(2)}`);
@@ -412,7 +446,12 @@ export async function persistTransactionListAction(
   if (proposedItems.length === 0) {
     return { ok: false, message: "Choose at least one scanned transaction to add." };
   }
-  const persist = await persistTransactionListLedgerEntries(prisma, session.user.id, proposedItems);
+  const persist = await persistTransactionListLedgerEntries(
+    prisma,
+    session.user.id,
+    proposedItems,
+    first.originChatJson,
+  );
   if (!persist.saved) {
     return { ok: false, message: persist.detail };
   }

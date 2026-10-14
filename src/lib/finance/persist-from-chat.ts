@@ -1,6 +1,8 @@
 import type { FlowDirection, Prisma, PrismaClient, TxRecurrence, TxStatus } from "@prisma/client";
 
+import { formatMoneyFromCents, majorToAmountCents } from "@/lib/finance/amount-cents";
 import { findOrCreateCategory } from "@/lib/finance/category-resolver";
+import { resolveTransactionCategory } from "@/lib/finance/line-item-category";
 
 function asString(v: unknown): string | null {
   if (typeof v === "string") return v.trim() || null;
@@ -20,6 +22,16 @@ function asNumber(v: unknown): number | null {
 function asBool(v: unknown): boolean | null {
   if (typeof v === "boolean") return v;
   return null;
+}
+
+/** LLM JSON may use notes, memo, or details — all map to the ledger memo column. */
+export function resolveTransactionNotes(transaction: Record<string, unknown>): string | null {
+  return (
+    asString(transaction.notes) ??
+    asString(transaction.memo) ??
+    asString(transaction.details) ??
+    asString(transaction.detail)
+  );
 }
 
 function parseOccurredAt(iso: string | null | undefined): Date {
@@ -87,16 +99,21 @@ export async function persistFreeformLedgerEntry(
   userId: string,
   transaction: Record<string, unknown>,
   rawStructuredJson: string,
+  originChatJson?: string | null,
 ): Promise<{ saved: boolean; detail: string; transactionId?: string }> {
   const amountRaw = asNumber(transaction.amount);
   if (amountRaw === null || amountRaw === 0) {
     return { saved: false, detail: "", transactionId: undefined };
   }
 
-  const amountAbsCents = Math.round(Math.abs(amountRaw) * 100);
+  const currency = asString(transaction.currency)?.toUpperCase() ?? "CAD";
+
+  const amountAbsCents = majorToAmountCents(amountRaw, currency);
   if (amountAbsCents <= 0) {
     return { saved: false, detail: "", transactionId: undefined };
   }
+
+  const payeeKindRaw = asString(transaction.payeeKind)?.toLowerCase() ?? "";
 
   let direction: FlowDirection = "out";
   const dirRaw = asString(transaction.direction)?.toLowerCase();
@@ -106,6 +123,7 @@ export async function persistFreeformLedgerEntry(
   else {
     const kind = asString(transaction.transactionKind)?.toLowerCase();
     if (kind === "income" || kind === "credit" || kind === "deposit") direction = "in";
+    else if (payeeKindRaw === "income") direction = "in";
   }
 
   const walletLabel = asString(transaction.walletLabel) ?? asString(transaction.wallet);
@@ -125,14 +143,21 @@ export async function persistFreeformLedgerEntry(
     if (hit) wallet = hit;
   }
 
-  const categoryName = asString(transaction.category) ?? asString(transaction.categoryName);
+  const merchant = asString(transaction.merchant);
+  const notes = resolveTransactionNotes(transaction);
+  const categoryName = resolveTransactionCategory({
+    category: asString(transaction.category) ?? asString(transaction.categoryName),
+    merchant,
+    notes,
+    lineItems: transaction.lineItems,
+  });
   const recurrenceRaw = asString(transaction.recurrence)?.toLowerCase();
   let recurrence: TxRecurrence = "one_time";
   if (recurrenceRaw === "recurrent" || recurrenceRaw === "recurring" || recurrenceRaw === "subscription") {
     recurrence = "recurrent";
   }
 
-  const payeeKind = asString(transaction.payeeKind)?.toLowerCase() ?? "";
+  const payeeKind = payeeKindRaw;
   const needsFlag = asBool(transaction.needsUserConfirm);
   const needsUserConfirm =
     needsFlag === true ||
@@ -145,8 +170,6 @@ export async function persistFreeformLedgerEntry(
     asString(transaction.confirmReason) ??
     (needsUserConfirm ? "Please confirm if this repeats (bill / loan / subscription)." : null);
 
-  const merchant = asString(transaction.merchant);
-  const notes = asString(transaction.notes);
   const occurredAt = parseOccurredAt(asString(transaction.transactionDate) ?? asString(transaction.occurredAt));
   const category = await findOrCreateCategory({
     db,
@@ -167,7 +190,7 @@ export async function persistFreeformLedgerEntry(
   if (duplicate) {
     return {
       saved: false,
-      detail: `Skipped duplicate entry: there is already a ${duplicate.currency} ${(amountAbsCents / 100).toFixed(2)} transaction on ${duplicate.occurredAt.toISOString().slice(0, 10)}.`,
+      detail: `Skipped duplicate entry: there is already a ${formatMoneyFromCents(amountAbsCents, duplicate.currency)} transaction on ${duplicate.occurredAt.toISOString().slice(0, 10)}.`,
       transactionId: duplicate.id,
     };
   }
@@ -179,7 +202,7 @@ export async function persistFreeformLedgerEntry(
       categoryId: category?.id ?? null,
       amountCents: amountAbsCents,
       direction,
-      currency: asString(transaction.currency)?.toUpperCase() ?? "CAD",
+      currency,
       merchant,
       memo: notes,
       occurredAt,
@@ -188,6 +211,7 @@ export async function persistFreeformLedgerEntry(
       confirmReason,
       source: "chat",
       rawStructuredJson,
+      originChatJson: originChatJson ?? null,
     },
   });
 
@@ -202,6 +226,7 @@ export async function persistTransactionListLedgerEntries(
   db: PrismaClient,
   userId: string,
   transactions: Record<string, unknown>[],
+  originChatJson?: string | null,
 ): Promise<{ saved: boolean; detail: string; transactionIds: string[] }> {
   const transactionIds: string[] = [];
   let savedCount = 0;
@@ -214,7 +239,7 @@ export async function persistTransactionListLedgerEntries(
       transactionIndex: index,
       transaction,
     });
-    const persisted = await persistFreeformLedgerEntry(db, userId, transaction, rawStructuredJson);
+    const persisted = await persistFreeformLedgerEntry(db, userId, transaction, rawStructuredJson, originChatJson);
     if (!persisted.saved) {
       if (persisted.detail.includes("Skipped duplicate entry")) {
         duplicateCount += 1;
@@ -373,7 +398,7 @@ export async function applyLedgerEdit(
     const after: Record<string, unknown> = {};
 
     if (edit.newAmount !== undefined && edit.newAmount !== null) {
-      const amountCents = Math.round(Math.abs(edit.newAmount) * 100);
+      const amountCents = majorToAmountCents(edit.newAmount, targetTx.currency);
       if (amountCents > 0 && targetTx.amountCents !== amountCents) {
         dataToUpdate.amountCents = amountCents;
         before.amountCents = targetTx.amountCents;
@@ -382,10 +407,20 @@ export async function applyLedgerEdit(
     }
 
     if (edit.newMemo !== undefined && edit.newMemo !== null) {
-      if (targetTx.memo !== edit.newMemo) {
-        dataToUpdate.memo = edit.newMemo;
-        before.memo = targetTx.memo;
-        after.memo = edit.newMemo;
+      const incomingMemo = edit.newMemo.trim();
+      if (incomingMemo.length > 0) {
+        const existingMemo = targetTx.memo?.trim() ?? "";
+        const nextMemo =
+          existingMemo.length > 0 &&
+          !incomingMemo.includes(existingMemo) &&
+          !existingMemo.includes(incomingMemo)
+            ? `${existingMemo} · ${incomingMemo}`
+            : incomingMemo;
+        if (targetTx.memo !== nextMemo) {
+          dataToUpdate.memo = nextMemo;
+          before.memo = targetTx.memo;
+          after.memo = nextMemo;
+        }
       }
     }
 

@@ -9,4 +9,4 @@ if [ ! -d node_modules ]; then
   /opt/homebrew/bin/npm ci
 fi
 
-exec /opt/homebrew/bin/npm run start
+exec /opt/homebrew/bin/npx next start -p 3200 -H ::1

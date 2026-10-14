@@ -11,7 +11,14 @@ import {
   type RecurrentCadence,
 } from "@/lib/finance/cadence";
 import { ensureFinanceSeed } from "@/lib/finance/seed";
+import { searchTransactionsGrouped } from "@/lib/finance/ledger-query";
+import { buildFinancialAnalysis } from "@/lib/finance/financial-analysis";
+import { browseTransactions, type TransactionBrowseFilters } from "@/lib/finance/transaction-browser";
 import { applyLedgerEdit, type LedgerEditRequest } from "@/lib/finance/persist-from-chat";
+import {
+  parseTransactionOriginChat,
+  type TransactionOriginChat,
+} from "@/lib/chat/transaction-origin";
 import { prisma } from "@/lib/prisma";
 
 export type ConfirmRecurringMode = {
@@ -164,6 +171,16 @@ export async function confirmTransactionAction(
   return { ok: true as const, seriesId: series.id };
 }
 
+export async function confirmAllPendingAsOneTimeAction() {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false as const, error: "Unauthorized" };
+  const r = await prisma.transaction.updateMany({
+    where: { userId: session.user.id, status: "pending_user" },
+    data: { recurrence: "one_time", status: "posted", confirmReason: null },
+  });
+  return { ok: true as const, count: r.count };
+}
+
 export type RecurrentSeriesRow = {
   id: string;
   label: string;
@@ -287,7 +304,24 @@ export async function applyPendingRecurrenceFromTextAction(args: {
   const session = await auth();
   if (!session?.user?.id) return { ok: false, error: "Unauthorized" };
 
-  if (/^(one[\s-]?time|one off|not recurring|no repeat|doesn'?t repeat)$/.test(lower)) {
+  const explicitCadence =
+    /^(one[\s-]?time|one off|not recurring|no repeat|doesn'?t repeat|does not repeat|never repeats)$/.test(lower) ||
+    /^(weekly|monthly|yearly|annually|annual|daily|bi[-\s]?weekly|fortnightly|quarterly)$/.test(lower) ||
+    /^every\s+\d+\s+(day|days|week|weeks|month|months|year|years)$/.test(lower) ||
+    /^each\s+(day|week|month|year)$/.test(lower) ||
+    /^per\s+(day|week|month|year)$/.test(lower) ||
+    /^every\s+\d+(st|nd|rd|th)?$/.test(lower) ||
+    /^on\s+the\s+\d{1,2}(st|nd|rd|th)?$/.test(lower) ||
+    /^the\s+\d{1,2}(st|nd|rd|th)?\s+of\s+each\s+month$/.test(lower);
+
+  if (!explicitCadence) {
+    return {
+      ok: false,
+      error: "Please reply with a clear cadence like one-time, weekly, monthly, yearly, or every 2 weeks.",
+    };
+  }
+
+  if (/^(one[\s-]?time|one off|not recurring|no repeat|doesn'?t repeat|does not repeat|never repeats)$/.test(lower)) {
     const r = await confirmTransactionAction(pendingTransactionId, { kind: "one_time" });
     return r.ok ? { ok: true } : { ok: false, error: r.error };
   }
@@ -329,7 +363,9 @@ export type TransactionDetail = {
   categoryId: string | null;
   categoryName: string;
   source: string;
+  receiptImageUrl: string | null;
   rawStructuredJson: string | null;
+  originChat: TransactionOriginChat | null;
   editHistory: EditSnapshot[];
 };
 
@@ -364,7 +400,7 @@ export async function getTransactionDetailAction(id: string): Promise<
 > {
   const session = await auth();
   if (!session?.user?.id) return { ok: false, error: "Unauthorized" };
-  const [tx, wallets, categories] = await Promise.all([
+  const [tx, wallets, categories, receiptImage] = await Promise.all([
     prisma.transaction.findFirst({
       where: { id, userId: session.user.id },
       include: { wallet: true, category: true },
@@ -374,6 +410,15 @@ export async function getTransactionDetailAction(id: string): Promise<
       where: { userId: session.user.id },
       orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
       select: { id: true, name: true, kind: true, parentId: true, parent: { select: { name: true } } },
+    }),
+    prisma.storedMedia.findFirst({
+      where: {
+        userId: session.user.id,
+        transactionId: id,
+        mimeType: { startsWith: "image/" },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { relativePath: true },
     }),
   ]);
   if (!tx) return { ok: false, error: "Transaction not found." };
@@ -400,7 +445,9 @@ export async function getTransactionDetailAction(id: string): Promise<
       categoryId: tx.categoryId,
       categoryName: tx.category?.name ?? "Other",
       source: tx.source,
+      receiptImageUrl: receiptImage ? `/api/media/${receiptImage.relativePath}` : null,
       rawStructuredJson: tx.rawStructuredJson,
+      originChat: parseTransactionOriginChat(tx.originChatJson),
       editHistory,
     },
     wallets,
@@ -603,4 +650,61 @@ export async function listCategoriesAction(): Promise<{ ok: true; categories: Ca
       icon: c.icon,
     }))
   };
+}
+
+export async function searchTransactionsGroupedAction(searchText?: string) {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false as const, error: "Unauthorized" };
+
+  const user = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { preferredCurrency: true },
+  });
+  const displayCurrency = (user?.preferredCurrency ?? "CAD").toUpperCase().slice(0, 3);
+
+  const result = await searchTransactionsGrouped(prisma, {
+    userId: session.user.id,
+    displayCurrency,
+    searchText: searchText?.trim() || undefined,
+  });
+
+  return { ok: true as const, ...result };
+}
+
+export async function browseTransactionsAction(filters?: TransactionBrowseFilters) {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false as const, error: "Unauthorized" };
+
+  const user = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { preferredCurrency: true },
+  });
+  const displayCurrency = (user?.preferredCurrency ?? "CAD").toUpperCase().slice(0, 3);
+
+  const result = await browseTransactions(prisma, {
+    userId: session.user.id,
+    displayCurrency,
+    filters,
+  });
+
+  return { ok: true as const, ...result };
+}
+
+export async function getFinancialAnalysisAction(months?: number) {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false as const, error: "Unauthorized" };
+
+  const user = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { preferredCurrency: true },
+  });
+  const displayCurrency = (user?.preferredCurrency ?? "CAD").toUpperCase().slice(0, 3);
+
+  const report = await buildFinancialAnalysis(prisma, {
+    userId: session.user.id,
+    displayCurrency,
+    months: months ?? 6,
+  });
+
+  return { ok: true as const, report };
 }

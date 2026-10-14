@@ -1,6 +1,8 @@
 import type { FlowDirection, PrismaClient, TxRecurrence, TxStatus } from "@prisma/client";
 
+import { formatMoneyFromCents, majorToAmountCents } from "@/lib/finance/amount-cents";
 import { findOrCreateCategory } from "@/lib/finance/category-resolver";
+import { parseLineItems, resolveTransactionCategory } from "@/lib/finance/line-item-category";
 
 function asString(v: unknown): string | null {
   if (typeof v === "string") return v.trim() || null;
@@ -154,6 +156,7 @@ export async function persistReceiptLedgerEntry(
   userId: string,
   receipt: Record<string, unknown>,
   rawStructuredJson: string,
+  originChatJson?: string | null,
 ): Promise<{ saved: boolean; detail: string; transactionId?: string }> {
   const currency = asString(receipt.currency);
   const total = asNumber(receipt.total, currency);
@@ -161,7 +164,7 @@ export async function persistReceiptLedgerEntry(
     return { saved: false, detail: "Receipt total is missing or zero.", transactionId: undefined };
   }
 
-  const amountAbsCents = Math.round(Math.abs(total) * 100);
+  const amountAbsCents = majorToAmountCents(total, currency);
   if (amountAbsCents <= 0) {
     return { saved: false, detail: "Invalid receipt total.", transactionId: undefined };
   }
@@ -176,10 +179,18 @@ export async function persistReceiptLedgerEntry(
   }
 
   const merchant = asString(receipt.merchant);
+  const lineItems = parseLineItems(receipt.lineItems);
+  const memoPreview = lineItemsMemo(receipt);
+  const categoryLabel = resolveTransactionCategory({
+    category: asString(receipt.category) ?? asString(receipt.categoryName),
+    merchant,
+    notes: memoPreview,
+    lineItems,
+  });
   const category = await findOrCreateCategory({
     db,
     userId,
-    label: "Other",
+    label: categoryLabel,
     direction: "out",
     fallbackSlug: "other",
   });
@@ -194,7 +205,7 @@ export async function persistReceiptLedgerEntry(
   if (duplicate) {
     return {
       saved: false,
-      detail: `Skipped duplicate receipt: there is already a ${duplicate.currency} ${(amountAbsCents / 100).toFixed(2)} expense on ${duplicate.occurredAt.toISOString().slice(0, 10)}.`,
+      detail: `Skipped duplicate receipt: there is already a ${formatMoneyFromCents(amountAbsCents, duplicate.currency)} expense on ${duplicate.occurredAt.toISOString().slice(0, 10)}.`,
       transactionId: duplicate.id,
     };
   }
@@ -224,12 +235,13 @@ export async function persistReceiptLedgerEntry(
       confirmReason: null,
       source: "chat_receipt",
       rawStructuredJson,
+      originChatJson: originChatJson ?? null,
     },
   });
 
   return {
     saved: true,
-    detail: `Saved receipt to ${wallet.name} · ${merchant ?? "Expense"} · ${(total).toFixed(2)} ${currency?.toUpperCase() ?? "CAD"}.`,
+    detail: `Saved receipt to ${wallet.name} · ${merchant ?? "Expense"} · ${formatMoneyFromCents(amountAbsCents, currency?.toUpperCase() ?? "CAD")}.`,
     transactionId: created.id,
   };
 }
@@ -240,6 +252,7 @@ export async function persistPaystubLedgerEntry(
   userId: string,
   paystub: Record<string, unknown>,
   rawStructuredJson: string,
+  originChatJson?: string | null,
 ): Promise<{ saved: boolean; detail: string; transactionId?: string }> {
   const currency = asString(paystub.currency);
   const net = asNumber(paystub.netPay, currency);
@@ -247,7 +260,7 @@ export async function persistPaystubLedgerEntry(
     return { saved: false, detail: "Net pay is missing or zero on this paystub.", transactionId: undefined };
   }
 
-  const amountAbsCents = Math.round(Math.abs(net) * 100);
+  const amountAbsCents = majorToAmountCents(net, currency);
   const wallets = await db.wallet.findMany({
     where: { userId },
     orderBy: [{ isDefault: "desc" }, { sortOrder: "asc" }],
@@ -281,7 +294,7 @@ export async function persistPaystubLedgerEntry(
   if (duplicate) {
     return {
       saved: false,
-      detail: `Skipped duplicate paystub: there is already a ${duplicate.currency} ${(amountAbsCents / 100).toFixed(2)} income entry on ${duplicate.occurredAt.toISOString().slice(0, 10)}.`,
+      detail: `Skipped duplicate paystub: there is already a ${formatMoneyFromCents(amountAbsCents, duplicate.currency)} income entry on ${duplicate.occurredAt.toISOString().slice(0, 10)}.`,
       transactionId: duplicate.id,
     };
   }
@@ -310,6 +323,7 @@ export async function persistPaystubLedgerEntry(
       confirmReason: null,
       source: "chat_paystub",
       rawStructuredJson,
+      originChatJson: originChatJson ?? null,
     },
   });
 

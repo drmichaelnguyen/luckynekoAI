@@ -55,7 +55,12 @@ function parseDataUrl(value: string): { mimeType: string; buffer: Buffer } | nul
 
 export async function loadGeneratedImageBuffer(source: string): Promise<{ buffer: Buffer; mimeType: string }> {
   const parsed = parseDataUrl(source);
-  if (parsed) return parsed;
+  if (parsed) {
+    if (!parsed.mimeType.toLowerCase().startsWith("image/")) {
+      throw new Error("Image generation returned a non-image data URL.");
+    }
+    return parsed;
+  }
 
   const response = await fetch(source);
   if (!response.ok) {
@@ -63,6 +68,9 @@ export async function loadGeneratedImageBuffer(source: string): Promise<{ buffer
   }
 
   const mimeType = response.headers.get("content-type")?.trim() || "image/png";
+  if (!mimeType.toLowerCase().startsWith("image/")) {
+    throw new Error("Generated image URL did not return an image.");
+  }
   return {
     buffer: Buffer.from(await response.arrayBuffer()),
     mimeType,
@@ -85,7 +93,7 @@ export async function normalizeIconImageBuffer(input: {
 
     return { buffer: normalized, mimeType: "image/png" };
   } catch {
-    return input;
+    throw new Error("Image generation returned invalid image data.");
   }
 }
 

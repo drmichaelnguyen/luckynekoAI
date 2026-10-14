@@ -3,6 +3,7 @@
 import { z } from "zod";
 
 import { auth } from "@/auth";
+import { majorToAmountCents } from "@/lib/finance/amount-cents";
 import { prisma } from "@/lib/prisma";
 
 const PlanKindSchema = z.enum(["spending_budget", "savings_goal"]);
@@ -62,11 +63,11 @@ const UpsertPlanSchema = z.object({
   targetDate: z.string().max(32).optional().nullable(),
 });
 
-function parseAmountCents(raw: string | null | undefined): number | null {
+function parseAmountCents(raw: string | null | undefined, currency: string): number | null {
   if (raw == null || raw === "") return null;
   const n = Number.parseFloat(raw.replace(/[$,]/g, ""));
   if (!Number.isFinite(n) || n < 0) return null;
-  const cents = Math.round(n * 100);
+  const cents = majorToAmountCents(n, currency);
   return cents > 0 ? cents : null;
 }
 
@@ -91,8 +92,8 @@ export async function upsertFinancialPlanAction(formData: FormData): Promise<
   }
 
   const d = parsed.data;
-  const amountCents = parseAmountCents(d.amountMajor ?? undefined);
   const currency = (d.currency ?? "CAD").toUpperCase().slice(0, 3);
+  const amountCents = parseAmountCents(d.amountMajor ?? undefined, currency);
   const targetDate =
     d.targetDate && /^\d{4}-\d{2}-\d{2}$/.test(d.targetDate) ? new Date(`${d.targetDate}T12:00:00.000Z`) : null;
 

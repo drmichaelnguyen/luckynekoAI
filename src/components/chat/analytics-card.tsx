@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 
 import { getLedgerDashboardDrilldownAction, type DashboardDrilldownResult } from "@/actions/dashboard";
+import { formatMoneyFromCents } from "@/lib/finance/amount-cents";
 import { cn } from "@/lib/utils";
 
 export type DashboardRange = "30d" | "month" | "all";
@@ -49,9 +50,7 @@ type AnalyticsDrillSelection =
   | { lens: "merchant"; merchant: string; flow: "out" };
 
 function formatMoney(cents: number, currency: string) {
-  const value = (Math.abs(cents) / 100).toFixed(2);
-  const sign = cents < 0 ? "−" : "";
-  return `${sign}${currency} ${value}`;
+  return formatMoneyFromCents(cents, currency);
 }
 
 function clamp01(value: number): number {

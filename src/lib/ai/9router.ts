@@ -34,6 +34,32 @@ export function normalize9RouterModel(value: string | null | undefined, fallback
   return trimmed;
 }
 
+/** Keep upstream calls short so chat server actions finish before Cloudflare/proxy timeouts (~100s). */
+const DEFAULT_ROUTER_FETCH_TIMEOUT_MS = 45_000;
+
+function getRouterFetchTimeoutMs(): number {
+  const raw = process.env.NINE_ROUTER_FETCH_TIMEOUT_MS;
+  if (raw) {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.min(Math.round(parsed), 120_000);
+    }
+  }
+  return DEFAULT_ROUTER_FETCH_TIMEOUT_MS;
+}
+
+function routerFetchTimeoutSignal(): AbortSignal {
+  return AbortSignal.timeout(getRouterFetchTimeoutMs());
+}
+
+function wrapRouterFetchError(error: unknown): Error {
+  if (error instanceof Error && error.name === "TimeoutError") {
+    const seconds = Math.round(getRouterFetchTimeoutMs() / 1000);
+    return new Error(`9router request timed out after ${seconds}s.`);
+  }
+  return error instanceof Error ? error : new Error("9router request failed.");
+}
+
 function get9RouterConfig() {
   const apiKey = process.env.NINE_ROUTER_API_KEY?.trim();
   if (!apiKey) return null;
@@ -156,21 +182,27 @@ export async function call9RouterChatCompletion(input: {
     : input.userPrompt;
 
   const requestUrl = input.url?.trim() || config.url;
-  const response = await fetch(requestUrl, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: normalize9RouterModel(input.model, config.model),
-      messages: [
-        { role: "system", content: input.systemInstruction },
-        { role: "user", content: userContent },
-      ],
-      temperature: input.temperature ?? 0.1,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(requestUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: normalize9RouterModel(input.model, config.model),
+        messages: [
+          { role: "system", content: input.systemInstruction },
+          { role: "user", content: userContent },
+        ],
+        temperature: input.temperature ?? 0.1,
+      }),
+      signal: routerFetchTimeoutSignal(),
+    });
+  } catch (error) {
+    throw wrapRouterFetchError(error);
+  }
 
   const body = await readChatCompletionResponse(response);
   if (!response.ok) {
@@ -201,20 +233,26 @@ export async function call9RouterImageGeneration(input: {
 
   const requestUrl = resolve9RouterImageGenerationUrl(input.url);
   
-  const response = await fetch(requestUrl, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: input.model?.trim() || "image-creation",
-      prompt: input.prompt,
-      n: 1,
-      size: "1024x1024",
-      response_format: "b64_json"
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(requestUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: input.model?.trim() || "image-creation",
+        prompt: input.prompt,
+        n: 1,
+        size: "1024x1024",
+        response_format: "b64_json",
+      }),
+      signal: routerFetchTimeoutSignal(),
+    });
+  } catch (error) {
+    throw wrapRouterFetchError(error);
+  }
 
   const body = await response.json().catch(() => null) as { data?: Array<{ b64_json?: string; url?: string }>; error?: { message?: string } } | null;
   if (!response.ok) {

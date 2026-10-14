@@ -1,35 +1,47 @@
 "use client";
 
-import { BarChart2, Download, FileInput, Loader2, PanelRightClose, RefreshCw, Shield, Upload, User, Wallet, Wrench, Tags } from "lucide-react";
+import { BarChart2, Database, Download, FileInput, List, Loader2, PanelRightClose, RefreshCw, Shield, Sparkles, Upload, User, Wallet, Wrench, Tags } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 
 import { importCsvWithLlmAction } from "@/actions/csv-import";
-import type { DashboardRange, LedgerDashboardResult } from "@/actions/dashboard";
+import type { DashboardWindowInput, LedgerDashboardResult } from "@/actions/dashboard";
 import { getLedgerDashboardAction } from "@/actions/dashboard";
 import {
-  confirmTransactionAction,
+  confirmAllPendingAsOneTimeAction,
   createWalletAction,
   deleteRecurrentSeriesAction,
   listPendingTransactionsAction,
   listRecurrentSeriesAction,
   listWalletsAction,
-  rejectPendingTransactionAction,
   updateRecurrentSeriesAction,
   type RecurrentSeriesRow,
 } from "@/actions/finance";
-import { parseCadenceInput, type RecurrentCadence } from "@/lib/finance/cadence";
+import { type RecurrentCadence } from "@/lib/finance/cadence";
 import { DashboardInsights } from "@/components/chat/dashboard-insights";
+import { PendingConfirmRow, type PendingConfirmItem } from "@/components/chat/pending-confirm-row";
+import { ToolsAdvancedDataTab } from "@/components/chat/tools-advanced-data-tab";
+import { ToolsFinancialAnalysisTab } from "@/components/chat/tools-financial-analysis-tab";
 import { ToolsPlansTab } from "@/components/chat/tools-plans-tab";
 import { ToolsProfileTab } from "@/components/chat/tools-profile-tab";
 import { ToolsCategoriesTab } from "@/components/chat/tools-categories-tab";
+import { ToolsTransactionsTab } from "@/components/chat/tools-transactions-tab";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { formatMoneyFromCents } from "@/lib/finance/amount-cents";
+import {
+  currentMoneyStoryPeriod,
+  moneyStoryDashboardWindow,
+  type MoneyStoryPeriod,
+} from "@/lib/finance/money-story-period";
 import { cn } from "@/lib/utils";
 
 export type AdvancedToolsTabId =
   | "dashboard"
+  | "transactions"
+  | "data"
+  | "analysis"
   | "import"
   | "confirm"
   | "recurring"
@@ -42,8 +54,7 @@ export type AdvancedToolsTabId =
 type Tab = AdvancedToolsTabId;
 
 function formatMoney(cents: number, currency: string) {
-  const v = (cents / 100).toFixed(2);
-  return `${currency} ${v}`;
+  return formatMoneyFromCents(cents, currency, { signed: false });
 }
 
 export function AdvancedToolsButton({
@@ -87,32 +98,18 @@ export function AdvancedToolsPanel({
   initialTab?: AdvancedToolsTabId;
 }) {
   const [tab, setTab] = useState<Tab>("dashboard");
-  const [dashboardRange, setDashboardRange] = useState<DashboardRange>("30d");
+  const [dashboardPeriod, setDashboardPeriod] = useState<MoneyStoryPeriod>(() => currentMoneyStoryPeriod());
   const [dashboardData, setDashboardData] = useState<Extract<LedgerDashboardResult, { ok: true }> | null>(null);
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [csvText, setCsvText] = useState("");
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [wallets, setWallets] = useState<{ id: string; name: string; kind: string; isDefault: boolean }[]>([]);
-  const [pending, setPending] = useState<
-    Array<{
-      id: string;
-      amountCents: number;
-      direction: string;
-      currency: string;
-      merchant: string | null;
-      memo: string | null;
-      occurredAt: string;
-      recurrence: string;
-      confirmReason: string | null;
-      walletName: string;
-      categoryName: string;
-      categoryIcon: string | null;
-    }>
-  >([]);
+  const [pending, setPending] = useState<PendingConfirmItem[]>([]);
   const [walletName, setWalletName] = useState("");
   const [backupMsg, setBackupMsg] = useState<string | null>(null);
   const [restoreConfirm, setRestoreConfirm] = useState(false);
   const restoreInputRef = useRef<HTMLInputElement>(null);
+  const dashboardRequestRef = useRef(0);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
 
@@ -127,10 +124,12 @@ export function AdvancedToolsPanel({
     });
   }, [onBooksChanged]);
 
-  const loadDashboard = useCallback((range: DashboardRange) => {
+  const loadDashboard = useCallback((window: DashboardWindowInput) => {
+    const requestId = ++dashboardRequestRef.current;
     setDashboardLoading(true);
     void (async () => {
-      const r = await getLedgerDashboardAction(range);
+      const r = await getLedgerDashboardAction(window);
+      if (requestId !== dashboardRequestRef.current) return;
       if (r.ok) setDashboardData(r);
       else setDashboardData(null);
       setDashboardLoading(false);
@@ -146,9 +145,9 @@ export function AdvancedToolsPanel({
 
   useEffect(() => {
     if (open && tab === "dashboard") {
-      loadDashboard(dashboardRange);
+      loadDashboard(moneyStoryDashboardWindow(dashboardPeriod));
     }
-  }, [open, tab, dashboardRange, loadDashboard]);
+  }, [open, tab, dashboardPeriod, loadDashboard]);
 
   useEffect(() => {
     if (!open) return;
@@ -167,7 +166,8 @@ export function AdvancedToolsPanel({
       />
       <div
         className={cn(
-          "relative flex h-full w-full max-w-md flex-col border-l bg-background shadow-xl sm:h-[min(100dvh-1.5rem,calc(100dvh-1.5rem))] sm:rounded-l-xl sm:rounded-r-lg",
+          "relative flex h-full w-full flex-col border-l bg-background shadow-xl sm:h-[min(100dvh-1.5rem,calc(100dvh-1.5rem))] sm:rounded-l-xl sm:rounded-r-lg",
+          tab === "data" || tab === "analysis" ? "max-w-4xl" : "max-w-md",
         )}
         role="dialog"
         aria-modal="true"
@@ -179,7 +179,7 @@ export function AdvancedToolsPanel({
               Advanced tools
             </h2>
             <p className="text-xs text-muted-foreground">
-              Dashboard · import · confirm · recurring · wallets · categories · plans · profile · backup
+              Analytics · transactions · data · analysis · import · confirm · wallets · plans · profile · backup
             </p>
           </div>
           <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close">
@@ -188,10 +188,13 @@ export function AdvancedToolsPanel({
         </div>
 
         {/* Tab navigation — icon grid on mobile, compact row on sm+ */}
-        <div className="grid grid-cols-4 gap-px border-b bg-border sm:flex sm:gap-0 sm:bg-transparent sm:border-b">
+        <div className="grid grid-cols-4 gap-px border-b bg-border sm:flex sm:flex-wrap sm:gap-0 sm:bg-transparent sm:border-b">
           {(
             [
               ["dashboard", "Analytics", BarChart2],
+              ["transactions", "Transactions", List],
+              ["data", "Data", Database],
+              ["analysis", "Analysis", Sparkles],
               ["import",    "Import",    FileInput],
               ["confirm",   "Confirm",   RefreshCw],
               ["recurring", "Recurring", RefreshCw],
@@ -230,12 +233,18 @@ export function AdvancedToolsPanel({
         <div className="flex-1 overflow-y-auto px-4 py-4">
           {tab === "dashboard" ? (
             <DashboardInsights
-              range={dashboardRange}
-              onRangeChange={setDashboardRange}
+              period={dashboardPeriod}
+              onPeriodChange={setDashboardPeriod}
               data={dashboardData}
               loading={dashboardLoading}
             />
           ) : null}
+
+          {tab === "transactions" ? <ToolsTransactionsTab /> : null}
+
+          {tab === "data" ? <ToolsAdvancedDataTab active={tab === "data"} /> : null}
+
+          {tab === "analysis" ? <ToolsFinancialAnalysisTab active={tab === "analysis"} /> : null}
 
           {tab === "import" ? (
             <div className="space-y-3 text-sm">
@@ -312,7 +321,29 @@ export function AdvancedToolsPanel({
               {pending.length === 0 ? (
                 <p className="text-xs text-muted-foreground">Nothing waiting — you&apos;re all caught up.</p>
               ) : (
-                <ul className="space-y-3">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-muted-foreground">
+                      {pending.length} waiting for your decision
+                    </p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={isPending}
+                      onClick={() => {
+                        startTransition(() => {
+                          void (async () => {
+                            await confirmAllPendingAsOneTimeAction();
+                            refresh();
+                          })();
+                        });
+                      }}
+                    >
+                      Confirm all as one-time
+                    </Button>
+                  </div>
+                  <ul className="space-y-3">
                   {pending.map((t) => (
                     <PendingConfirmRow
                       key={t.id}
@@ -322,7 +353,8 @@ export function AdvancedToolsPanel({
                       startTransition={startTransition}
                     />
                   ))}
-                </ul>
+                  </ul>
+                </div>
               )}
             </div>
           ) : null}
@@ -549,195 +581,6 @@ export function AdvancedToolsPanel({
         </div>
       </div>
     </div>
-  );
-}
-
-type PendingRow = {
-  id: string;
-  amountCents: number;
-  direction: string;
-  currency: string;
-  merchant: string | null;
-  memo: string | null;
-  occurredAt: string;
-  recurrence: string;
-  confirmReason: string | null;
-  walletName: string;
-  categoryName: string;
-  categoryIcon: string | null;
-};
-
-const CADENCE_CHOICES: { value: RecurrentCadence | "custom"; label: string }[] = [
-  { value: "weekly", label: "Weekly" },
-  { value: "monthly", label: "Monthly" },
-  { value: "yearly", label: "Yearly" },
-  { value: "custom", label: "Custom…" },
-];
-
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
-function toDateInput(iso: string): string {
-  return iso.slice(0, 10);
-}
-
-function addDays(iso: string, days: number): string {
-  const d = new Date(iso);
-  d.setTime(d.getTime() + days * MS_PER_DAY);
-  return d.toISOString().slice(0, 10);
-}
-
-function defaultNextDateFor(anchorIso: string, cadence: RecurrentCadence): string {
-  const days = cadence === "weekly" ? 7 : cadence === "yearly" ? 365 : 30;
-  return addDays(anchorIso, days);
-}
-
-function PendingConfirmRow({
-  item,
-  isPending,
-  onRefresh,
-  startTransition,
-}: {
-  item: PendingRow;
-  isPending: boolean;
-  onRefresh: () => void;
-  startTransition: (fn: () => void) => void;
-}) {
-  const [repeats, setRepeats] = useState<"one_time" | RecurrentCadence | "custom">("one_time");
-  const [customText, setCustomText] = useState("");
-  const [nextDate, setNextDate] = useState<string>(() =>
-    defaultNextDateFor(item.occurredAt, "monthly"),
-  );
-
-  function selectRepeats(next: "one_time" | RecurrentCadence | "custom") {
-    setRepeats(next);
-    if (next === "one_time" || next === "custom") return;
-    setNextDate(defaultNextDateFor(item.occurredAt, next));
-  }
-
-  function confirm() {
-    startTransition(() => {
-      void (async () => {
-        if (repeats === "one_time") {
-          await confirmTransactionAction(item.id, { kind: "one_time" });
-        } else if (repeats === "custom") {
-          const parsed = parseCadenceInput(customText);
-          await confirmTransactionAction(item.id, {
-            kind: "recurring",
-            cadence: parsed.cadence,
-            customCadence: parsed.customCadence,
-            nextReminderAt: nextDate || null,
-          });
-        } else {
-          await confirmTransactionAction(item.id, {
-            kind: "recurring",
-            cadence: repeats,
-            customCadence: null,
-            nextReminderAt: nextDate || null,
-          });
-        }
-        onRefresh();
-      })();
-    });
-  }
-
-  return (
-    <li className="rounded-xl border bg-card p-3 text-xs shadow-sm">
-      <div className="flex items-start gap-3">
-        {item.categoryIcon ? (
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted mt-0.5">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={item.categoryIcon} alt={item.categoryName} className="h-full w-full object-cover" />
-          </div>
-        ) : null}
-        <div className="flex-1">
-          <div className="font-medium text-foreground">
-            {formatMoney(item.amountCents, item.currency)}{" "}
-            {item.direction === "out" ? "out" : "in"} · {item.walletName}
-          </div>
-          <div className="mt-1 text-muted-foreground">
-            {(item.merchant || item.memo || "No description") + ` · ${item.categoryName}`}
-          </div>
-        </div>
-      </div>
-      {item.confirmReason ? (
-        <div className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-[11px] text-amber-950 dark:bg-amber-950/40 dark:text-amber-100">
-          {item.confirmReason}
-        </div>
-      ) : null}
-
-      <fieldset className="mt-3 space-y-2">
-        <legend className="text-[11px] font-medium text-foreground">How often does this repeat?</legend>
-        <div className="flex flex-wrap gap-1.5">
-          <Button
-            type="button"
-            size="sm"
-            variant={repeats === "one_time" ? "secondary" : "outline"}
-            onClick={() => selectRepeats("one_time")}
-            className="h-7 px-2 text-[11px]"
-          >
-            One-time
-          </Button>
-          {CADENCE_CHOICES.map((c) => (
-            <Button
-              key={c.value}
-              type="button"
-              size="sm"
-              variant={repeats === c.value ? "secondary" : "outline"}
-              onClick={() => selectRepeats(c.value)}
-              className="h-7 px-2 text-[11px]"
-            >
-              {c.label}
-            </Button>
-          ))}
-        </div>
-        {repeats === "custom" ? (
-          <Input
-            value={customText}
-            onChange={(e) => setCustomText(e.target.value)}
-            placeholder='e.g. "every 2 weeks", "quarterly", "every 15th"'
-            className="h-8 text-xs"
-          />
-        ) : null}
-        {repeats !== "one_time" ? (
-          <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
-            Next reminder
-            <Input
-              type="date"
-              value={toDateInput(nextDate)}
-              onChange={(e) => setNextDate(e.target.value)}
-              className="h-8 w-auto text-xs"
-            />
-          </label>
-        ) : null}
-      </fieldset>
-
-      <div className="mt-3 flex flex-wrap gap-2">
-        <Button
-          type="button"
-          size="sm"
-          disabled={isPending || (repeats === "custom" && !customText.trim())}
-          onClick={confirm}
-        >
-          {repeats === "one_time" ? "Confirm one-time" : "Confirm recurring"}
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={isPending}
-          onClick={() => {
-            startTransition(() => {
-              void (async () => {
-                await rejectPendingTransactionAction(item.id);
-                onRefresh();
-              })();
-            });
-          }}
-        >
-          Dismiss
-        </Button>
-      </div>
-    </li>
   );
 }
 

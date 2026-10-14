@@ -1,21 +1,39 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { DashboardRange, LedgerDashboardResult } from "@/actions/dashboard";
+import type { DashboardWindowInput, LedgerDashboardResult } from "@/actions/dashboard";
 import { getLedgerDashboardAction } from "@/actions/dashboard";
-import { DashboardInsights } from "@/components/chat/dashboard-insights";
+import { getPendingConfirmCountAction } from "@/actions/finance";
+import { AlertsPanel } from "@/components/chat/alerts-panel";
 import { BottomNav } from "@/components/chat/bottom-nav";
+import { DashboardInsights } from "@/components/chat/dashboard-insights";
+import {
+  currentMoneyStoryPeriod,
+  moneyStoryDashboardWindow,
+  type MoneyStoryPeriod,
+} from "@/lib/finance/money-story-period";
 
 export function AnalyticsPageClient() {
-  const [range, setRange] = useState<DashboardRange>("30d");
+  const [period, setPeriod] = useState<MoneyStoryPeriod>(() => currentMoneyStoryPeriod());
   const [data, setData] = useState<Extract<LedgerDashboardResult, { ok: true }> | null>(null);
   const [loading, setLoading] = useState(false);
+  const [alertsOpen, setAlertsOpen] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
+  const requestRef = useRef(0);
 
-  const load = useCallback((r: DashboardRange) => {
+  const refreshPendingCount = useCallback(() => {
+    void getPendingConfirmCountAction().then((r) => {
+      if (r.ok) setPendingCount(r.count);
+    });
+  }, []);
+
+  const load = useCallback((window: DashboardWindowInput) => {
+    const requestId = ++requestRef.current;
     setLoading(true);
     void (async () => {
-      const result = await getLedgerDashboardAction(r);
+      const result = await getLedgerDashboardAction(window);
+      if (requestId !== requestRef.current) return;
       if (result.ok) setData(result);
       else setData(null);
       setLoading(false);
@@ -23,37 +41,53 @@ export function AnalyticsPageClient() {
   }, []);
 
   useEffect(() => {
-    load(range);
-  }, [load, range]);
+    load(moneyStoryDashboardWindow(period));
+  }, [load, period]);
 
-  const handleRangeChange = (r: DashboardRange) => {
-    setRange(r);
-    load(r);
-  };
+  useEffect(() => {
+    refreshPendingCount();
+  }, [refreshPendingCount, alertsOpen]);
 
   return (
-    <div className="flex min-h-dvh flex-col bg-background">
-      {/* Header */}
-      <header className="sticky top-0 z-20 border-b bg-background/80 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-4 py-3">
-          <div className="flex-1">
-            <h1 className="text-base font-semibold leading-tight">Analytics</h1>
-            <p className="text-xs text-muted-foreground">Spending overview & insights</p>
-          </div>
+    <div className="relative flex min-h-dvh flex-col overflow-hidden bg-background">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 h-[26rem] bg-[radial-gradient(ellipse_at_12%_0%,_hsla(160,55%,42%,0.16),_transparent_55%),radial-gradient(ellipse_at_88%_8%,_hsla(198,70%,48%,0.10),_transparent_48%)] dark:bg-[radial-gradient(ellipse_at_12%_0%,_hsla(160,45%,35%,0.18),_transparent_55%),radial-gradient(ellipse_at_88%_8%,_hsla(198,55%,40%,0.12),_transparent_48%)]"
+      />
+
+      <header className="relative z-20">
+        <div className="mx-auto w-full max-w-3xl px-4 pb-1 pt-5">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-teal-800/70 dark:text-teal-200/70">
+            NekoZeni
+          </p>
+          <h1 className="mt-1 text-3xl font-semibold tracking-tight text-foreground">
+            Money story
+          </h1>
+          <p className="mt-1 max-w-md text-sm text-muted-foreground">
+            Income, spending, and where it went — for this window.
+          </p>
         </div>
       </header>
 
-      {/* Content */}
-      <main className="mx-auto w-full max-w-3xl flex-1 px-4 pb-[calc(6rem+env(safe-area-inset-bottom))] pt-4">
+      <main className="relative z-10 mx-auto w-full max-w-3xl flex-1 px-4 pb-[calc(6rem+env(safe-area-inset-bottom))] pt-4">
         <DashboardInsights
-          range={range}
-          onRangeChange={handleRangeChange}
+          period={period}
+          onPeriodChange={setPeriod}
           data={data}
           loading={loading}
         />
       </main>
 
-      <BottomNav />
+      <AlertsPanel
+        open={alertsOpen}
+        onClose={() => setAlertsOpen(false)}
+        onChanged={refreshPendingCount}
+      />
+
+      <BottomNav
+        pendingCount={pendingCount}
+        onNotificationsClick={() => setAlertsOpen(true)}
+      />
     </div>
   );
 }

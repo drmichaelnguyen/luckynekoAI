@@ -14,7 +14,9 @@ import {
 import { recordAiRequestLog, usageFromGeminiResult, type AiUsageMetrics } from "@/lib/ai/telemetry";
 import { loadAdminRuntimeSettings, resolveProviderChoice } from "@/lib/admin-runtime-settings";
 import { parseCsvTable } from "@/lib/csv-parse";
+import { majorToAmountCents } from "@/lib/finance/amount-cents";
 import { findOrCreateCategory } from "@/lib/finance/category-resolver";
+import { resolveTransactionCategory } from "@/lib/finance/line-item-category";
 import { financeContextLines, ensureFinanceSeed } from "@/lib/finance/seed";
 import { slugify } from "@/lib/finance/slug";
 import { prisma } from "@/lib/prisma";
@@ -286,7 +288,7 @@ Rules:
 
     for (const row of mappedRows) {
       if (row.rowIndex < 0 || row.rowIndex >= rows.length) continue;
-      const amountCents = Math.round(Math.abs(row.amount) * 100);
+      const amountCents = majorToAmountCents(row.amount, row.currency ?? "CAD");
       if (amountCents <= 0) continue;
 
       let wallet = defaultWallet;
@@ -303,7 +305,11 @@ Rules:
         sourceRow,
         mappedCategoryName: row.categoryName,
       });
-      const categoryLabel = categoryOverride ?? row.categoryName;
+      const categoryLabel = resolveTransactionCategory({
+        category: categoryOverride ?? row.categoryName,
+        merchant: row.merchant,
+        notes: row.memo,
+      });
       const other = categories.find((c) => c.slug === "other");
       let categoryId: string | null = other?.id ?? null;
       if (categoryLabel) {

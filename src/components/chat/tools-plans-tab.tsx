@@ -13,9 +13,12 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2, Pencil, Trash2 } from "lucide-react";
 
-function majorFromCents(cents: number | null): string {
+import { amountCentsToMajor } from "@/lib/finance/amount-cents";
+
+function majorFromCents(cents: number | null, currency: string): string {
   if (cents == null) return "";
-  return (cents / 100).toFixed(2);
+  const major = amountCentsToMajor(cents, currency);
+  return Number.isInteger(major) ? String(major) : major.toFixed(2);
 }
 
 export function ToolsPlansTab({ active, onChanged }: { active: boolean; onChanged?: () => void }) {
@@ -59,7 +62,7 @@ export function ToolsPlansTab({ active, onChanged }: { active: boolean; onChange
     setKind(p.kind);
     setTitle(p.title);
     setDescription(p.description ?? "");
-    setAmountMajor(majorFromCents(p.amountCents));
+    setAmountMajor(majorFromCents(p.amountCents, p.currency));
     setCurrency(p.currency);
     setPeriod(p.period);
     setTargetDate(p.targetDate ?? "");
@@ -88,7 +91,7 @@ export function ToolsPlansTab({ active, onChanged }: { active: boolean; onChange
                   </span>
                 </div>
                 <div className="mt-0.5 text-muted-foreground">
-                  {p.amountCents != null ? `${majorFromCents(p.amountCents)} ${p.currency}` : "No amount set"}
+                  {p.amountCents != null ? `${majorFromCents(p.amountCents, p.currency)} ${p.currency}` : "No amount set"}
                   {p.period !== "none" ? ` · ${p.period}` : ""}
                   {p.targetDate ? ` · by ${p.targetDate}` : ""}
                 </div>

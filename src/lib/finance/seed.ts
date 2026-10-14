@@ -1,5 +1,6 @@
 import type { PlanKind, PlanPeriod, PrismaClient, WalletKind } from "@prisma/client";
 
+import { amountCentsToMajor, isZeroDecimalCurrency } from "@/lib/finance/amount-cents";
 import { buildExchangeRateContext } from "@/lib/finance/exchange-rates";
 import { slugify } from "@/lib/finance/slug";
 import { loadAdminRuntimeSettings } from "@/lib/admin-runtime-settings";
@@ -252,12 +253,8 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
       `- Preferred currency: ${preferredCurrency}`,
     ];
 
-    // Add chat preferences if detected
-    if (settings.learning.enableChatPreferenceLearning && chatPrefs?.language === "vi") {
-      prefLines.push(`- Language: Vietnamese — respond in Vietnamese unless user writes English first.`);
-    } else if (settings.learning.enableChatPreferenceLearning && chatPrefs?.language === "en") {
-      prefLines.push(`- Language: English — respond in English.`);
-    }
+    // Language is controlled by the app setting plus the current chat message.
+    // Do not inject learned language here because it can override the user's selected locale.
     if (settings.learning.enableChatPreferenceLearning && chatPrefs?.verbosity === "concise") {
       prefLines.push(`- Response style: concise — keep replies short and direct.`);
     } else if (settings.learning.enableChatPreferenceLearning && chatPrefs?.verbosity === "detailed") {
@@ -305,7 +302,9 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
             "PENDING CONFIRMATIONS (user has not yet decided if these repeat; if the user answers with a cadence in chat, return pendingRecurrenceUpdate):",
             ...pendingConfirms.map((p) => {
               const name = p.merchant || p.memo || "No description";
-              const amt = `${p.currency} ${(p.amountCents / 100).toFixed(2)}`;
+              const amt = `${p.currency} ${amountCentsToMajor(p.amountCents ?? 0, p.currency).toLocaleString("en-US", {
+                maximumFractionDigits: isZeroDecimalCurrency(p.currency) ? 0 : 2,
+              })}`;
               const dir = p.direction === "out" ? "out" : "in";
               const date = p.occurredAt.toISOString().slice(0, 10);
               const reason = p.confirmReason ? ` · reason: ${p.confirmReason.slice(0, 120)}` : "";
