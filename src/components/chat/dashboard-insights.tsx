@@ -5,6 +5,7 @@ import { ArrowLeft, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useState, useTransition } from "react";
 
 import type { DashboardDrilldownResult, DashboardRange, LedgerDashboardResult } from "@/actions/dashboard";
+import { deleteTransactionAction } from "@/actions/finance";
 
 type CategoryRow = {
   categoryId: string | null;
@@ -144,21 +145,122 @@ function InteractiveBarBlock<T extends { name: string; expenseCents: number; inc
   );
 }
 
+function DeleteConfirm({
+  pending,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  pending: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/5 px-2 py-2">
+      <p className="text-[11px] leading-relaxed text-foreground">
+        Delete this transaction? It leaves your ledger and is kept under Tools → Deleted, where you can restore it
+        later.
+      </p>
+      {error ? <p className="mt-1 text-[11px] text-destructive">{error}</p> : null}
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="destructive"
+          className="h-7 px-2 text-[11px]"
+          disabled={pending}
+          onClick={onConfirm}
+        >
+          {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+          Delete
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-7 px-2 text-[11px]"
+          disabled={pending}
+          onClick={onCancel}
+        >
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function TransactionDetail({
+  transaction,
+  currency,
+  confirming,
+  pending,
+  error,
+  onAskDelete,
+  onCancelDelete,
+  onConfirmDelete,
+}: {
+  transaction: DrillTransaction;
+  currency: string;
+  confirming: boolean;
+  pending: boolean;
+  error: string | null;
+  onAskDelete: () => void;
+  onCancelDelete: () => void;
+  onConfirmDelete: () => void;
+}) {
+  const rows: Array<[string, string]> = [
+    ["Amount", `${transaction.direction === "out" ? "Out" : "In"} · ${formatMoney(transaction.amountCents, currency)}`],
+    ["Date", transaction.occurredAt.slice(0, 10)],
+    ["Wallet", transaction.walletName],
+    ["Category", transaction.categoryName],
+    ["Payee", transaction.merchant?.trim() || "—"],
+    ["Note", transaction.memo?.trim() || "—"],
+  ];
+  return (
+    <div className="mt-4 space-y-3">
+      <dl className="space-y-2 rounded-lg border bg-muted/20 px-3 py-2 text-xs">
+        {rows.map(([label, value]) => (
+          <div key={label} className="flex items-start justify-between gap-3">
+            <dt className="shrink-0 text-muted-foreground">{label}</dt>
+            <dd className="min-w-0 text-right font-medium text-foreground">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {confirming ? (
+        <DeleteConfirm pending={pending} error={error} onCancel={onCancelDelete} onConfirm={onConfirmDelete} />
+      ) : (
+        <Button type="button" variant="destructive" className="w-full" disabled={pending} onClick={onAskDelete}>
+          Delete
+        </Button>
+      )}
+    </div>
+  );
+}
+
+type DrillTransaction = Extract<DashboardDrilldownResult, { ok: true }>["transactions"][number];
+
 export function DashboardInsights({
   range,
   onRangeChange,
   data,
   loading,
+  onLedgerChanged,
 }: {
   range: DashboardRange;
   onRangeChange: (r: DashboardRange) => void;
   data: Extract<LedgerDashboardResult, { ok: true }> | null;
   loading: boolean;
+  onLedgerChanged?: () => void;
 }) {
   const [drill, setDrill] = useState<DrillSelection | null>(null);
   const [drillData, setDrillData] = useState<Extract<DashboardDrilldownResult, { ok: true }> | null>(null);
   const [drillError, setDrillError] = useState<string | null>(null);
   const [drillPending, startDrill] = useTransition();
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletePending, startDelete] = useTransition();
 
   const loadDrill = useCallback(
     (sel: DrillSelection) => {
@@ -196,13 +298,52 @@ export function DashboardInsights({
     setDrill(null);
     setDrillData(null);
     setDrillError(null);
+    setDetailId(null);
+    setConfirmDeleteId(null);
+    setDeleteError(null);
   }, [range]);
 
   const closeDrill = () => {
     setDrill(null);
     setDrillData(null);
     setDrillError(null);
+    setDetailId(null);
+    setConfirmDeleteId(null);
+    setDeleteError(null);
   };
+
+  const openDetail = (id: string) => {
+    setDetailId(id);
+    setConfirmDeleteId(null);
+    setDeleteError(null);
+  };
+
+  const closeDetail = () => {
+    setDetailId(null);
+    setConfirmDeleteId(null);
+    setDeleteError(null);
+  };
+
+  const deleteTransaction = (id: string) => {
+    setDeleteError(null);
+    startDelete(() => {
+      void (async () => {
+        const result = await deleteTransactionAction(id);
+        if (!result.ok) {
+          setDeleteError(result.error);
+          return;
+        }
+        setConfirmDeleteId(null);
+        setDetailId(null);
+        if (drill) loadDrill(drill);
+        onLedgerChanged?.();
+      })();
+    });
+  };
+
+  const detailTx: DrillTransaction | null = detailId
+    ? (drillData?.transactions.find((row) => row.id === detailId) ?? null)
+    : null;
 
   return (
     <div className="space-y-4 text-sm">
@@ -250,13 +391,19 @@ export function DashboardInsights({
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <h3 className="truncate text-base font-semibold leading-tight">
-                      {drillData?.title ?? "Details"}
+                      {detailTx ? "Transaction details" : (drillData?.title ?? "Details")}
                     </h3>
                     <p className="mt-0.5 text-[11px] text-muted-foreground">
-                      {drillData?.subtitle ?? "Loading…"}
+                      {detailTx ? (drillData?.title ?? "Ledger line") : (drillData?.subtitle ?? "Loading…")}
                     </p>
                   </div>
-                  <Button type="button" variant="outline" size="sm" className="shrink-0 gap-1" onClick={closeDrill}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0 gap-1"
+                    onClick={detailTx ? closeDetail : closeDrill}
+                  >
                     <ArrowLeft className="h-3.5 w-3.5" />
                     Back
                   </Button>
@@ -269,12 +416,32 @@ export function DashboardInsights({
                   </div>
                 ) : drillError ? (
                   <p className="mt-4 text-sm text-destructive">{drillError}</p>
+                ) : detailTx ? (
+                  <TransactionDetail
+                    transaction={detailTx}
+                    currency={data.displayCurrency}
+                    confirming={confirmDeleteId === detailTx.id}
+                    pending={deletePending}
+                    error={deleteError}
+                    onAskDelete={() => {
+                      setDeleteError(null);
+                      setConfirmDeleteId(detailTx.id);
+                    }}
+                    onCancelDelete={() => {
+                      setConfirmDeleteId(null);
+                      setDeleteError(null);
+                    }}
+                    onConfirmDelete={() => deleteTransaction(detailTx.id)}
+                  />
                 ) : drillData ? (
                   <>
                     <SeriesChart series={drillData.series} currency={data.displayCurrency} />
                     <div className="mt-5 border-t pt-3">
                       <div className="text-xs font-medium text-foreground">Recent lines</div>
-                      <ul className="mt-2 max-h-56 space-y-2 overflow-y-auto text-[11px]">
+                      <p className="mt-1 text-[10px] text-muted-foreground">
+                        Tap a line for details. Delete keeps the row so you can restore it from Tools → Deleted.
+                      </p>
+                      <ul className="mt-2 max-h-72 space-y-2 overflow-y-auto text-[11px]">
                         {drillData.transactions.length === 0 ? (
                           <li className="text-muted-foreground">No transactions match this slice.</li>
                         ) : (
@@ -283,19 +450,51 @@ export function DashboardInsights({
                               key={t.id}
                               className="flex flex-col gap-0.5 rounded-md border bg-muted/20 px-2 py-1.5"
                             >
-                              <div className="flex justify-between gap-2">
-                                <span className="font-medium text-foreground">
-                                  {t.direction === "out" ? "Out" : "In"} · {formatMoney(t.amountCents, data.displayCurrency)}
-                                </span>
-                                <span className="shrink-0 text-muted-foreground">
-                                  {t.occurredAt.slice(0, 10)}
-                                </span>
-                              </div>
-                              <div className="text-muted-foreground">
-                                {t.walletName} · {t.categoryName}
-                              </div>
-                              {(t.merchant || t.memo) && (
-                                <div className="truncate text-muted-foreground">{t.merchant ?? t.memo}</div>
+                              <button
+                                type="button"
+                                onClick={() => openDetail(t.id)}
+                                className="w-full rounded-md text-left ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+                              >
+                                <div className="flex justify-between gap-2">
+                                  <span className="font-medium text-foreground">
+                                    {t.direction === "out" ? "Out" : "In"} · {formatMoney(t.amountCents, data.displayCurrency)}
+                                  </span>
+                                  <span className="shrink-0 text-muted-foreground">
+                                    {t.occurredAt.slice(0, 10)}
+                                  </span>
+                                </div>
+                                <div className="text-muted-foreground">
+                                  {t.walletName} · {t.categoryName}
+                                </div>
+                                {(t.merchant || t.memo) && (
+                                  <div className="truncate text-muted-foreground">{t.merchant ?? t.memo}</div>
+                                )}
+                              </button>
+                              {confirmDeleteId === t.id ? (
+                                <DeleteConfirm
+                                  pending={deletePending}
+                                  error={deleteError}
+                                  onCancel={() => {
+                                    setConfirmDeleteId(null);
+                                    setDeleteError(null);
+                                  }}
+                                  onConfirm={() => deleteTransaction(t.id)}
+                                />
+                              ) : (
+                                <div className="mt-1.5 flex justify-end">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 px-2 text-[11px] text-destructive hover:text-destructive"
+                                    onClick={() => {
+                                      setDeleteError(null);
+                                      setConfirmDeleteId(t.id);
+                                    }}
+                                  >
+                                    Delete
+                                  </Button>
+                                </div>
                               )}
                             </li>
                           ))

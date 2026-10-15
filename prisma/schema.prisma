@@ -23,13 +23,14 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  wallets          Wallet[]
-  categories       Category[]
-  transactions     Transaction[]
-  recurrentSeries  RecurrentSeries[]
-  importBatches    ImportBatch[]
-  storedMedia      StoredMedia[]
-  financialPlans   FinancialPlan[]
+  wallets              Wallet[]
+  categories           Category[]
+  transactions         Transaction[]
+  deletedTransactions  DeletedTransaction[]
+  recurrentSeries      RecurrentSeries[]
+  importBatches        ImportBatch[]
+  storedMedia          StoredMedia[]
+  financialPlans       FinancialPlan[]
 }
 
 enum PlanKind {
@@ -196,6 +197,37 @@ model Transaction {
   @@index([userId, status])
   @@index([walletId])
   @@index([importBatchId])
+}
+
+/// Ledger rows removed from the active books. Restoring copies the row back onto Transaction.
+model DeletedTransaction {
+  id        String @id
+  userId    String
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  walletId    String
+  categoryId  String?
+  amountCents Int
+  direction   FlowDirection
+  currency    String
+  merchant    String?
+  memo        String?
+  occurredAt  DateTime
+  recurrence  TxRecurrence
+  status      TxStatus
+  confirmReason String?
+
+  recurrentSeriesId String?
+  source            String
+  importBatchId     String?
+  rawStructuredJson String?
+
+  /// Original Transaction timestamps, kept so a restore puts the same row back.
+  createdAt DateTime
+  updatedAt DateTime
+  deletedAt DateTime @default(now())
+
+  @@index([userId, deletedAt])
 }
 
 enum RecurrentCadence {

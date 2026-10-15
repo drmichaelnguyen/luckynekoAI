@@ -28,6 +28,7 @@ const en: GuideContent = {
         "Under Tools → Profile you can set language (English / Tiếng Việt), name, chat nickname, profile photo, and password — or tap your name in the chat header to open Profile. Tools → Plans is for spending budgets and savings goals the assistant can see in context.",
         "Images and PDFs you send are stored for your account (and included in a full ZIP backup under Tools → Backup).",
         "Large photos are automatically compressed to a clear JPEG when needed so uploads stay fast and storage-friendly.",
+        "To remove a transaction, open Tools → Dashboard, open a total or bar, then open the line. Delete on the transaction details moves it to Tools → Deleted, where you can restore it later.",
       ],
     },
     {
@@ -81,6 +82,7 @@ const vi: GuideContent = {
         "Tại Công cụ → Hồ sơ bạn chọn ngôn ngữ (English / Tiếng Việt), đặt tên, biệt danh chat, ảnh đại diện và mật khẩu — hoặc chạm tên bạn trên thanh chat để mở Hồ sơ. Công cụ → Kế hoạch dùng cho ngân sách chi và mục tiêu tiết kiệm mà trợ lý thấy trong ngữ cảnh.",
         "Ảnh và PDF bạn gửi được lưu theo tài khoản (và nằm trong bản sao lưu ZIP đầy đủ tại Công cụ → Sao lưu).",
         "Ảnh lớn được nén tự động sang JPEG rõ nét khi cần để tải nhanh và tiết kiệm dung lượng.",
+        "Để xóa một giao dịch: Công cụ → Dashboard, mở một tổng hoặc cột, rồi mở dòng đó. Nút Delete trong chi tiết giao dịch chuyển dòng sang Công cụ → Deleted, và bạn có thể khôi phục sau.",
       ],
     },
     {
