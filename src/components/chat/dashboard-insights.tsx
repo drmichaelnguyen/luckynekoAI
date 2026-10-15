@@ -312,11 +312,13 @@ export function DashboardInsights({
   onPeriodChange,
   data,
   loading,
+  onLedgerChanged,
 }: {
   period: MoneyStoryPeriod;
   onPeriodChange: (period: MoneyStoryPeriod) => void;
   data: Extract<LedgerDashboardResult, { ok: true }> | null;
   loading: boolean;
+  onLedgerChanged?: () => void;
 }) {
   const [drill, setDrill] = useState<DrillSelection | null>(null);
   const [drillData, setDrillData] = useState<Extract<DashboardDrilldownResult, { ok: true }> | null>(null);
@@ -660,6 +662,9 @@ export function DashboardInsights({
                       {drill.level === "transaction" ? (
                         <div className="border-t border-teal-900/10 pt-4 dark:border-teal-100/10">
                           <div className="text-xs font-semibold text-foreground">Transactions</div>
+                          <p className="mt-1 text-[10px] text-muted-foreground">
+                            Tap a line to edit or delete. Deleted rows can be restored from Tools → Deleted.
+                          </p>
                           <ul className="mt-2 max-h-56 space-y-0 overflow-y-auto text-[11px]">
                             {drillData.transactions.length === 0 ? (
                               <li className="py-3 text-muted-foreground">No transactions match this slice.</li>
@@ -703,6 +708,9 @@ export function DashboardInsights({
                       <SeriesChart series={drillData.series} currency={data.displayCurrency} />
                       <div className="border-t border-teal-900/10 pt-4 dark:border-teal-100/10">
                         <div className="text-xs font-semibold text-foreground">Recent lines</div>
+                        <p className="mt-1 text-[10px] text-muted-foreground">
+                          Tap a line to edit or delete. Deleted rows can be restored from Tools → Deleted.
+                        </p>
                         <ul className="mt-2 max-h-56 space-y-0 overflow-y-auto text-[11px]">
                           {drillData.transactions.length === 0 ? (
                             <li className="py-3 text-muted-foreground">No transactions match this slice.</li>
@@ -1129,7 +1137,15 @@ export function DashboardInsights({
       <TransactionDetailDrawer
         transactionId={selectedTxId}
         onClose={() => setSelectedTxId(null)}
-        onSaved={() => setSelectedTxId(null)}
+        onSaved={() => {
+          setSelectedTxId(null);
+          onLedgerChanged?.();
+        }}
+        onDeleted={() => {
+          setSelectedTxId(null);
+          if (drill) loadDrill(drill);
+          onLedgerChanged?.();
+        }}
       />
     </div>
   );

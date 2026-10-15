@@ -10,6 +10,7 @@ import {
   parseCadenceInput,
   type RecurrentCadence,
 } from "@/lib/finance/cadence";
+import { moveTransactionToDeleted, restoreDeletedTransaction } from "@/lib/finance/deleted-transactions";
 import { ensureFinanceSeed } from "@/lib/finance/seed";
 import { searchTransactionsGrouped } from "@/lib/finance/ledger-query";
 import { buildFinancialAnalysis } from "@/lib/finance/financial-analysis";
@@ -707,4 +708,59 @@ export async function getFinancialAnalysisAction(months?: number) {
   });
 
   return { ok: true as const, report };
+}
+
+export async function deleteTransactionAction(id: string) {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false as const, error: "Unauthorized" };
+  const result = await moveTransactionToDeleted(prisma, session.user.id, id);
+  if (!result.ok) return { ok: false as const, error: result.error };
+  return { ok: true as const };
+}
+
+export async function listDeletedTransactionsAction() {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false as const, error: "Unauthorized" };
+  const userId = session.user.id;
+  const rows = await prisma.deletedTransaction.findMany({
+    where: { userId },
+    orderBy: { deletedAt: "desc" },
+    take: 100,
+  });
+  const walletIds = [...new Set(rows.map((row) => row.walletId))];
+  const categoryIds = [...new Set(rows.map((row) => row.categoryId).filter((id): id is string => Boolean(id)))];
+  const [wallets, categories] = await Promise.all([
+    walletIds.length
+      ? prisma.wallet.findMany({ where: { userId, id: { in: walletIds } }, select: { id: true, name: true } })
+      : Promise.resolve([]),
+    categoryIds.length
+      ? prisma.category.findMany({ where: { userId, id: { in: categoryIds } }, select: { id: true, name: true } })
+      : Promise.resolve([]),
+  ]);
+  const walletNames = new Map(wallets.map((wallet) => [wallet.id, wallet.name]));
+  const categoryNames = new Map(categories.map((category) => [category.id, category.name]));
+  return {
+    ok: true as const,
+    rows: rows.map((row) => ({
+      id: row.id,
+      amountCents: row.amountCents,
+      direction: row.direction,
+      currency: row.currency,
+      merchant: row.merchant,
+      memo: row.memo,
+      occurredAt: row.occurredAt.toISOString(),
+      deletedAt: row.deletedAt.toISOString(),
+      walletName: walletNames.get(row.walletId) ?? "Wallet removed",
+      categoryName: row.categoryId ? (categoryNames.get(row.categoryId) ?? "Uncategorized") : "Uncategorized",
+      walletMissing: !walletNames.has(row.walletId),
+    })),
+  };
+}
+
+export async function restoreDeletedTransactionAction(id: string) {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false as const, error: "Unauthorized" };
+  const result = await restoreDeletedTransaction(prisma, session.user.id, id);
+  if (!result.ok) return { ok: false as const, error: result.error };
+  return { ok: true as const };
 }

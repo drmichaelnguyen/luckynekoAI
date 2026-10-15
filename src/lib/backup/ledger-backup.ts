@@ -78,8 +78,13 @@ const TransactionRow = z.object({
   importBatchId: z.string().nullable(),
   rawStructuredJson: z.string().nullable(),
   originChatJson: z.string().nullable().optional(),
+  editHistoryJson: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
+});
+
+const DeletedTransactionRow = TransactionRow.extend({
+  deletedAt: z.string(),
 });
 
 const StoredMediaBackupRow = z.object({
@@ -133,6 +138,7 @@ export const LedgerBackupSchema = z.object({
   importBatches: z.array(ImportBatchRow).max(5000),
   recurrentSeries: z.array(RecurrentSeriesRow).max(2000),
   transactions: z.array(TransactionRow).max(50_000),
+  deletedTransactions: z.array(DeletedTransactionRow).max(50_000).optional(),
   storedMedia: z.array(StoredMediaBackupRow).max(5000).optional(),
   financialPlans: z.array(FinancialPlanBackupRow).max(500).optional(),
 });
@@ -152,14 +158,16 @@ export async function buildLedgerBackupJson(
 ): Promise<{ json: string; filename: string }> {
   const user = await findUserForLedgerBackupHeader(db, userId);
 
-  const [wallets, categories, importBatches, recurrentSeries, transactions, financialPlans] = await Promise.all([
-    db.wallet.findMany({ where: { userId }, orderBy: { sortOrder: "asc" } }),
-    db.category.findMany({ where: { userId }, orderBy: { sortOrder: "asc" } }),
-    db.importBatch.findMany({ where: { userId }, orderBy: { createdAt: "asc" } }),
-    db.recurrentSeries.findMany({ where: { userId }, orderBy: { createdAt: "asc" } }),
-    db.transaction.findMany({ where: { userId }, orderBy: { occurredAt: "asc" } }),
-    db.financialPlan.findMany({ where: { userId }, orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] }),
-  ]);
+  const [wallets, categories, importBatches, recurrentSeries, transactions, deletedTransactions, financialPlans] =
+    await Promise.all([
+      db.wallet.findMany({ where: { userId }, orderBy: { sortOrder: "asc" } }),
+      db.category.findMany({ where: { userId }, orderBy: { sortOrder: "asc" } }),
+      db.importBatch.findMany({ where: { userId }, orderBy: { createdAt: "asc" } }),
+      db.recurrentSeries.findMany({ where: { userId }, orderBy: { createdAt: "asc" } }),
+      db.transaction.findMany({ where: { userId }, orderBy: { occurredAt: "asc" } }),
+      db.deletedTransaction.findMany({ where: { userId }, orderBy: { deletedAt: "asc" } }),
+      db.financialPlan.findMany({ where: { userId }, orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] }),
+    ]);
 
   const payload: LedgerBackup = {
     version: BACKUP_VERSION,
@@ -229,8 +237,32 @@ export async function buildLedgerBackupJson(
       importBatchId: t.importBatchId,
       rawStructuredJson: t.rawStructuredJson,
       originChatJson: t.originChatJson,
+      editHistoryJson: t.editHistoryJson,
       createdAt: t.createdAt.toISOString(),
       updatedAt: t.updatedAt.toISOString(),
+    })),
+    deletedTransactions: deletedTransactions.map((t) => ({
+      id: t.id,
+      walletId: t.walletId,
+      categoryId: t.categoryId,
+      amountCents: t.amountCents,
+      direction: t.direction,
+      currency: t.currency,
+      merchant: t.merchant,
+      memo: t.memo,
+      occurredAt: t.occurredAt.toISOString(),
+      recurrence: t.recurrence,
+      status: t.status,
+      confirmReason: t.confirmReason,
+      recurrentSeriesId: t.recurrentSeriesId,
+      source: t.source,
+      importBatchId: t.importBatchId,
+      rawStructuredJson: t.rawStructuredJson,
+      originChatJson: t.originChatJson,
+      editHistoryJson: t.editHistoryJson,
+      createdAt: t.createdAt.toISOString(),
+      updatedAt: t.updatedAt.toISOString(),
+      deletedAt: t.deletedAt.toISOString(),
     })),
     financialPlans: financialPlans.map((p) => ({
       id: p.id,
@@ -360,15 +392,26 @@ function assertReferentialIntegrity(data: LedgerBackup): string | null {
     if (!walletIds.has(s.walletId)) return `RecurrentSeries ${s.id} references unknown wallet.`;
     if (s.categoryId && !categoryIds.has(s.categoryId)) return `RecurrentSeries ${s.id} references unknown category.`;
   }
-  for (const t of data.transactions) {
-    if (!walletIds.has(t.walletId)) return `Transaction ${t.id} references unknown wallet.`;
-    if (t.categoryId && !categoryIds.has(t.categoryId)) return `Transaction ${t.id} references unknown category.`;
-    if (t.importBatchId && !batchIds.has(t.importBatchId)) return `Transaction ${t.id} references unknown import batch.`;
+  const checkTransaction = (t: (typeof data.transactions)[number], label: string) => {
+    if (!walletIds.has(t.walletId)) return `${label} ${t.id} references unknown wallet.`;
+    if (t.categoryId && !categoryIds.has(t.categoryId)) return `${label} ${t.id} references unknown category.`;
+    if (t.importBatchId && !batchIds.has(t.importBatchId)) return `${label} ${t.id} references unknown import batch.`;
     if (t.recurrentSeriesId && !seriesIds.has(t.recurrentSeriesId)) {
-      return `Transaction ${t.id} references unknown recurrent series.`;
+      return `${label} ${t.id} references unknown recurrent series.`;
     }
+    return null;
+  };
+  for (const t of data.transactions) {
+    const issue = checkTransaction(t, "Transaction");
+    if (issue) return issue;
   }
   const txIds = new Set(data.transactions.map((t) => t.id));
+  for (const t of data.deletedTransactions ?? []) {
+    if (txIds.has(t.id)) return `Deleted transaction ${t.id} duplicates a live transaction.`;
+    const issue = checkTransaction(t, "Deleted transaction");
+    if (issue) return issue;
+    txIds.add(t.id);
+  }
   for (const m of data.storedMedia ?? []) {
     if (m.transactionId && !txIds.has(m.transactionId)) {
       return `Stored media ${m.id} references unknown transaction ${m.transactionId}.`;
@@ -414,6 +457,7 @@ export async function restoreLedgerBackupForUser(
       await tx.storedMedia.deleteMany({ where: { userId: uid } });
     }
     await tx.financialPlan.deleteMany({ where: { userId: uid } });
+    await tx.deletedTransaction.deleteMany({ where: { userId: uid } });
     await tx.transaction.deleteMany({ where: { userId: uid } });
     await tx.recurrentSeries.deleteMany({ where: { userId: uid } });
     await tx.importBatch.deleteMany({ where: { userId: uid } });
@@ -506,8 +550,38 @@ export async function restoreLedgerBackupForUser(
           importBatchId: t.importBatchId,
           rawStructuredJson: t.rawStructuredJson,
           originChatJson: t.originChatJson ?? null,
+          editHistoryJson: t.editHistoryJson ?? null,
           createdAt: new Date(t.createdAt),
           updatedAt: new Date(t.updatedAt),
+        })),
+      });
+    }
+
+    for (const part of chunk(b.deletedTransactions ?? [], 200)) {
+      await tx.deletedTransaction.createMany({
+        data: part.map((t) => ({
+          id: t.id,
+          userId: uid,
+          walletId: t.walletId,
+          categoryId: t.categoryId,
+          amountCents: t.amountCents,
+          direction: t.direction,
+          currency: t.currency.toUpperCase().slice(0, 3),
+          merchant: t.merchant,
+          memo: t.memo,
+          occurredAt: new Date(t.occurredAt),
+          recurrence: t.recurrence,
+          status: t.status,
+          confirmReason: t.confirmReason,
+          recurrentSeriesId: t.recurrentSeriesId,
+          source: t.source,
+          importBatchId: t.importBatchId,
+          rawStructuredJson: t.rawStructuredJson,
+          originChatJson: t.originChatJson ?? null,
+          editHistoryJson: t.editHistoryJson ?? null,
+          createdAt: new Date(t.createdAt),
+          updatedAt: new Date(t.updatedAt),
+          deletedAt: new Date(t.deletedAt),
         })),
       });
     }

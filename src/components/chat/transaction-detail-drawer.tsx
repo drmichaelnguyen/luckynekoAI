@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { ChevronDown, ChevronUp, Loader2, X, Send, Sparkles, Image as ImageIcon, MessagesSquare } from "lucide-react";
 import {
+  deleteTransactionAction,
   getTransactionDetailAction,
   updateTransactionAction,
   type EditableFields,
@@ -26,10 +27,12 @@ export function TransactionDetailDrawer({
   transactionId,
   onClose,
   onSaved,
+  onDeleted,
 }: {
   transactionId: string | null;
   onClose: () => void;
   onSaved?: () => void;
+  onDeleted?: () => void;
 }) {
   const [data, setData] = useState<{
     tx: TransactionDetail;
@@ -39,6 +42,9 @@ export function TransactionDetailDrawer({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, startLoad] = useTransition();
   const [isSaving, startSave] = useTransition();
+  const [isDeleting, startDelete] = useTransition();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [isReceiptPreviewOpen, setIsReceiptPreviewOpen] = useState(false);
@@ -70,6 +76,8 @@ export function TransactionDetailDrawer({
     setData(null);
     setLoadError(null);
     setSaveMsg(null);
+    setConfirmDelete(false);
+    setDeleteError(null);
     setShowHistory(false);
     setIsReceiptPreviewOpen(false);
     setChatHistory([]);
@@ -488,24 +496,87 @@ export function TransactionDetailDrawer({
 
         {/* Footer */}
         {data && (
-          <div className="flex items-center justify-between border-t px-4 py-3">
-            {saveMsg ? (
-              <p className={cn("text-xs", saveMsg.ok ? "text-green-600" : "text-destructive")}>
-                {saveMsg.text}
-              </p>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                Original: {formatMoney(data.tx.amountCents, data.tx.currency)} · {formatDate(data.tx.occurredAt)}
-              </p>
-            )}
-            <Button
-              type="button"
-              size="sm"
-              disabled={isSaving || isLoading}
-              onClick={handleSave}
-            >
-              {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
-            </Button>
+          <div className="space-y-3 border-t px-4 py-3">
+            {confirmDelete ? (
+              <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
+                <p className="text-[11px] leading-relaxed text-foreground">
+                  Delete this transaction? It leaves your ledger and is kept under Tools → Deleted, where you can
+                  restore it later.
+                </p>
+                {deleteError ? <p className="mt-1 text-[11px] text-destructive">{deleteError}</p> : null}
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="destructive"
+                    disabled={isDeleting}
+                    onClick={() => {
+                      if (!transactionId) return;
+                      setDeleteError(null);
+                      startDelete(async () => {
+                        const r = await deleteTransactionAction(transactionId);
+                        if (!r.ok) {
+                          setDeleteError(r.error);
+                          return;
+                        }
+                        setConfirmDelete(false);
+                        onDeleted?.();
+                        onClose();
+                      });
+                    }}
+                  >
+                    {isDeleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                    Delete
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={isDeleting}
+                    onClick={() => {
+                      setConfirmDelete(false);
+                      setDeleteError(null);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+            <div className="flex items-center justify-between gap-2">
+              {saveMsg ? (
+                <p className={cn("text-xs", saveMsg.ok ? "text-green-600" : "text-destructive")}>
+                  {saveMsg.text}
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Original: {formatMoney(data.tx.amountCents, data.tx.currency)} · {formatDate(data.tx.occurredAt)}
+                </p>
+              )}
+              <div className="flex shrink-0 gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="text-destructive hover:text-destructive"
+                  disabled={isSaving || isLoading || isDeleting}
+                  onClick={() => {
+                    setConfirmDelete(true);
+                    setDeleteError(null);
+                  }}
+                >
+                  Delete
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={isSaving || isLoading || isDeleting}
+                  onClick={handleSave}
+                >
+                  {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+                </Button>
+              </div>
+            </div>
           </div>
         )}
       </div>

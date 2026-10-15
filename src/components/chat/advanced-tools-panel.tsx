@@ -1,6 +1,6 @@
 "use client";
 
-import { BarChart2, Database, Download, FileInput, List, Loader2, PanelRightClose, RefreshCw, Shield, Sparkles, Upload, User, Wallet, Wrench, Tags } from "lucide-react";
+import { BarChart2, Database, Download, FileInput, List, Loader2, PanelRightClose, RefreshCw, Shield, Sparkles, Trash2, Upload, User, Wallet, Wrench, Tags } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 
@@ -11,9 +11,11 @@ import {
   confirmAllPendingAsOneTimeAction,
   createWalletAction,
   deleteRecurrentSeriesAction,
+  listDeletedTransactionsAction,
   listPendingTransactionsAction,
   listRecurrentSeriesAction,
   listWalletsAction,
+  restoreDeletedTransactionAction,
   updateRecurrentSeriesAction,
   type RecurrentSeriesRow,
 } from "@/actions/finance";
@@ -44,6 +46,7 @@ export type AdvancedToolsTabId =
   | "analysis"
   | "import"
   | "confirm"
+  | "deleted"
   | "recurring"
   | "wallets"
   | "plans"
@@ -105,6 +108,22 @@ export function AdvancedToolsPanel({
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [wallets, setWallets] = useState<{ id: string; name: string; kind: string; isDefault: boolean }[]>([]);
   const [pending, setPending] = useState<PendingConfirmItem[]>([]);
+  const [deleted, setDeleted] = useState<
+    Array<{
+      id: string;
+      amountCents: number;
+      direction: string;
+      currency: string;
+      merchant: string | null;
+      memo: string | null;
+      occurredAt: string;
+      deletedAt: string;
+      walletName: string;
+      categoryName: string;
+      walletMissing: boolean;
+    }>
+  >([]);
+  const [deletedMsg, setDeletedMsg] = useState<string | null>(null);
   const [walletName, setWalletName] = useState("");
   const [backupMsg, setBackupMsg] = useState<string | null>(null);
   const [restoreConfirm, setRestoreConfirm] = useState(false);
@@ -116,9 +135,14 @@ export function AdvancedToolsPanel({
   const refresh = useCallback(() => {
     startTransition(() => {
       void (async () => {
-        const [w, p] = await Promise.all([listWalletsAction(), listPendingTransactionsAction()]);
+        const [w, p, d] = await Promise.all([
+          listWalletsAction(),
+          listPendingTransactionsAction(),
+          listDeletedTransactionsAction(),
+        ]);
         if (w.ok) setWallets(w.wallets);
         if (p.ok) setPending(p.rows);
+        if (d.ok) setDeleted(d.rows);
         onBooksChanged?.();
       })();
     });
@@ -179,7 +203,7 @@ export function AdvancedToolsPanel({
               Advanced tools
             </h2>
             <p className="text-xs text-muted-foreground">
-              Analytics · transactions · data · analysis · import · confirm · wallets · plans · profile · backup
+              Analytics · transactions · data · analysis · import · confirm · deleted · wallets · plans · profile · backup
             </p>
           </div>
           <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close">
@@ -197,6 +221,7 @@ export function AdvancedToolsPanel({
               ["analysis", "Analysis", Sparkles],
               ["import",    "Import",    FileInput],
               ["confirm",   "Confirm",   RefreshCw],
+              ["deleted",   "Deleted",   Trash2],
               ["recurring", "Recurring", RefreshCw],
               ["wallets",   "Wallets",   Wallet],
               ["categories","Categories",Tags],
@@ -226,6 +251,11 @@ export function AdvancedToolsPanel({
                   {pending.length > 9 ? "9+" : pending.length}
                 </span>
               ) : null}
+              {id === "deleted" && deleted.length > 0 ? (
+                <span className="absolute right-1 top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-muted px-0.5 text-[9px] font-bold text-muted-foreground sm:static sm:ml-0.5 sm:h-4 sm:min-w-4 sm:text-[10px]">
+                  {deleted.length > 9 ? "9+" : deleted.length}
+                </span>
+              ) : null}
             </button>
           ))}
         </div>
@@ -237,6 +267,10 @@ export function AdvancedToolsPanel({
               onPeriodChange={setDashboardPeriod}
               data={dashboardData}
               loading={dashboardLoading}
+              onLedgerChanged={() => {
+                loadDashboard(moneyStoryDashboardWindow(dashboardPeriod));
+                refresh();
+              }}
             />
           ) : null}
 
@@ -363,6 +397,67 @@ export function AdvancedToolsPanel({
             <RecurringTab active={tab === "recurring"} onChanged={refresh} />
           ) : null}
 
+          {tab === "deleted" ? (
+            <div className="space-y-3 text-sm">
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Transactions you delete are stored here instead of being erased. Restore puts the same row back on
+                your ledger.
+              </p>
+              {deletedMsg ? (
+                <p className="rounded-lg border bg-muted/40 px-3 py-2 text-xs whitespace-pre-wrap">{deletedMsg}</p>
+              ) : null}
+              {deleted.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No deleted transactions.</p>
+              ) : (
+                <ul className="space-y-3">
+                  {deleted.map((t) => (
+                    <li key={t.id} className="rounded-xl border bg-card p-3 text-xs shadow-sm">
+                      <div className="font-medium text-foreground">
+                        {formatMoney(t.amountCents, t.currency)} {t.direction === "out" ? "out" : "in"} · {t.walletName}
+                      </div>
+                      <div className="mt-1 text-muted-foreground">
+                        {(t.merchant || t.memo || "No description") + ` · ${t.categoryName}`}
+                      </div>
+                      <div className="mt-1 text-muted-foreground">
+                        {t.occurredAt.slice(0, 10)} · deleted {t.deletedAt.slice(0, 10)}
+                      </div>
+                      {t.walletMissing ? (
+                        <p className="mt-2 text-[11px] text-destructive">
+                          The wallet for this transaction no longer exists, so it cannot be restored.
+                        </p>
+                      ) : (
+                        <div className="mt-3">
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={isPending}
+                            onClick={() => {
+                              setDeletedMsg(null);
+                              startTransition(() => {
+                                void (async () => {
+                                  const r = await restoreDeletedTransactionAction(t.id);
+                                  if (!r.ok) {
+                                    setDeletedMsg(r.error);
+                                    return;
+                                  }
+                                  setDeletedMsg("Restored to your ledger.");
+                                  refresh();
+                                  loadDashboard(moneyStoryDashboardWindow(dashboardPeriod));
+                                })();
+                              });
+                            }}
+                          >
+                            Restore
+                          </Button>
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ) : null}
+
           {tab === "wallets" ? (
             <div className="space-y-4 text-sm">
               <p className="text-xs text-muted-foreground">
@@ -423,7 +518,8 @@ export function AdvancedToolsPanel({
           {tab === "backup" ? (
             <div className="space-y-4 text-sm">
               <p className="text-xs leading-relaxed text-muted-foreground">
-                Your wallets, categories, transactions, recurring series, import batches, financial plans, and{" "}
+                Your wallets, categories, transactions (including deleted ones you can still restore), recurring series,
+                import batches, financial plans, and{" "}
                 <span className="font-medium text-foreground">saved receipt / image uploads</span> from chat live
                 under your account. Download JSON (ledger only) or a full ZIP (ledger + files + a training manifest).
                 Restore only from exports you made while signed in with the{" "}
@@ -512,7 +608,7 @@ export function AdvancedToolsPanel({
               <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-3">
                 <div className="text-xs font-medium text-destructive">Restore from backup</div>
                 <p className="mt-1 text-[11px] text-muted-foreground">
-                  Replaces all wallets, categories, transactions, batches, and recurring series. A{" "}
+                  Replaces all wallets, categories, transactions, deleted transactions, batches, and recurring series. A{" "}
                   <span className="font-medium text-foreground">.zip</span> from “full backup” also replaces saved
                   chat images/PDFs for this account. Cannot be undone.
                 </p>
