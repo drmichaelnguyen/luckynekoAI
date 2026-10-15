@@ -47,6 +47,7 @@ function normalizeQueryText(value: string): string {
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
+    .replace(/đ/g, "d")
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -223,6 +224,17 @@ export function extractSearchTerms(message: string): string[] {
     "paid",
     "pay",
     "got",
+    "buy",
+    "bought",
+    "buying",
+    "purchased",
+    "ordered",
+    "mua",
+    "we",
+    "about",
+    "there",
+    "is",
+    "it",
     "net",
     "gross",
     "bonus",
@@ -355,6 +367,27 @@ function looksLikeAnalyticsOnlyRequest(message: string): boolean {
   );
 }
 
+const COMPLETED_PURCHASE =
+  /\b(bought|i paid|paid for|purchased|got it for|picked up|spent|da mua|vua mua|mua roi|da tra)\b/;
+const PLAN_INTENT =
+  /\b(want to|planning|thinking of|should i|can i afford|going to|will buy|muon mua|dinh mua|sap mua)\b/;
+
+/** True when the user is reporting a purchase that already happened. Intent wording returns false. */
+export function looksLikeCompletedPurchase(message: string): boolean {
+  const normalized = normalizeQueryText(message);
+  if (!normalized) return false;
+  if (COMPLETED_PURCHASE.test(normalized)) return true;
+  if (PLAN_INTENT.test(normalized)) return false;
+  return false;
+}
+
+/** True only for explicit future-buy wording, not a completed purchase. */
+export function hasExplicitPlanIntent(message: string): boolean {
+  const normalized = normalizeQueryText(message);
+  if (!normalized || looksLikeCompletedPurchase(message)) return false;
+  return PLAN_INTENT.test(normalized);
+}
+
 function looksLikeDeclarativePurchase(message: string): boolean {
   const normalized = normalizeQueryText(message);
   if (!normalized) return false;
@@ -436,6 +469,10 @@ export function looksLikeLedgerLookupRequest(message: string): boolean {
       normalized,
     )
   ) {
+    return true;
+  }
+
+  if (/\b(do we have|do i have|did i|have i|is there|any data|any record)\b/.test(normalized)) {
     return true;
   }
 
@@ -843,10 +880,19 @@ export type LedgerQueryResult = {
   transactions: LedgerSearchRow[];
 };
 
+export type LedgerPlanHit = {
+  id: string;
+  title: string;
+  description: string | null;
+  amountCents: number | null;
+  currency: string;
+};
+
 export type LedgerSearchResponse = {
   query: ParsedLedgerQuery;
   result: LedgerQueryResult;
   formattedText: string;
+  plans: LedgerPlanHit[];
 };
 
 function sortCurrencyTotals(totals: LedgerCurrencyTotal[], displayCurrency: string): LedgerCurrencyTotal[] {
@@ -1140,14 +1186,58 @@ export async function searchLedger(
     query,
   });
 
-  const formattedText = formatLedgerQueryResponse(
+  const plans = await searchMatchingPlans(db, input.userId, input.message);
+  let formattedText = formatLedgerQueryResponse(
     query,
     result,
     input.displayCurrency,
     input.responseLanguage ?? "English",
   );
+  if (plans.length > 0) {
+    formattedText = `${formattedText}\n\n${
+      result.txCount === 0
+        ? formatPlannedPurchaseFallback(plans)
+        : `PLANNED, NOT PURCHASED:\n${plans.map((plan) => `- ${plan.title}`).join("\n")}`
+    }`;
+  }
 
-  return { query, result, formattedText };
+  return { query, result, formattedText, plans };
+}
+
+export function formatPlannedPurchaseFallback(plans: LedgerPlanHit[]): string {
+  const bits = plans.map((plan) => {
+    if (plan.amountCents == null) return plan.title;
+    const major = plan.currency === "VND" || plan.currency === "JPY" ? String(plan.amountCents) : (plan.amountCents / 100).toFixed(2);
+    return `${plan.title} (${major} ${plan.currency})`;
+  });
+  return `Not found in transactions, but you have a planned purchase: ${bits.join("; ")}.`;
+}
+
+export async function searchMatchingPlans(
+  db: PrismaClient,
+  userId: string,
+  message: string,
+): Promise<LedgerPlanHit[]> {
+  const terms = extractSearchTerms(message);
+  if (terms.length === 0) return [];
+  const plans = await db.financialPlan.findMany({
+    where: { userId },
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    take: 200,
+  });
+  return plans
+    .filter((plan) => {
+      const haystack = normalizeQueryText(`${plan.title} ${plan.description ?? ""}`);
+      return terms.every((term) => haystack.includes(term));
+    })
+    .slice(0, 20)
+    .map((plan) => ({
+      id: plan.id,
+      title: plan.title,
+      description: plan.description,
+      amountCents: plan.amountCents,
+      currency: plan.currency,
+    }));
 }
 
 export type WalletTransactionGroup = {
@@ -1168,7 +1258,7 @@ export async function searchTransactionsGrouped(
     searchText?: string;
     limit?: number;
   },
-): Promise<{ groups: WalletTransactionGroup[]; totalCount: number; displayCurrency: string }> {
+): Promise<{ groups: WalletTransactionGroup[]; totalCount: number; displayCurrency: string; plans: LedgerPlanHit[] }> {
   const searchTerms = input.searchText?.trim()
     ? extractSearchTerms(input.searchText)
     : [];
@@ -1245,10 +1335,13 @@ export async function searchTransactionsGrouped(
     .filter((g) => g.transactions.length > 0)
     .sort((a, b) => a.sortOrder - b.sortOrder || a.walletName.localeCompare(b.walletName));
 
+  const plans = input.searchText?.trim() ? await searchMatchingPlans(db, input.userId, input.searchText) : [];
+
   return {
     groups,
     totalCount: filtered.length,
     displayCurrency: input.displayCurrency,
+    plans,
   };
 }
 

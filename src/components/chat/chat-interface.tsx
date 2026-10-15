@@ -38,6 +38,7 @@ import { getPendingConfirmCountAction } from "@/actions/finance";
 import { AdvancedToolsPanel,
   type AdvancedToolsTabId,
 } from "@/components/chat/advanced-tools-panel";
+import { PlanMatchActions, PlannedPurchaseNotice } from "@/components/chat/planned-purchase-actions";
 import { AlertsPanel } from "@/components/chat/alerts-panel";
 import { BottomNav } from "@/components/chat/bottom-nav";
 import { DailySpendCheckinBanner } from "@/components/chat/daily-spend-checkin-banner";
@@ -571,14 +572,17 @@ export function ChatInterface() {
           parts.push(result.followUpQuestion);
         }
         const spoken = parts.join("\n");
+        const assistantId = randomId();
 
         setMessages((prev) => [
           ...prev,
           {
-            id: randomId(),
+            id: assistantId,
             role: "assistant",
             content: spoken,
             structuredJson,
+            planNotice: result.planCreated && result.planNotice ? result.planNotice : null,
+            planMatches: result.planMatches,
           },
         ]);
         if (result.pendingDocumentImport) {
@@ -882,6 +886,41 @@ export function ChatInterface() {
                           </div>
                         ) : null}
                       </div>
+
+                      {m.planNotice ? (
+                        <PlannedPurchaseNotice
+                          plan={m.planNotice}
+                          onResolved={(note) => {
+                            setMessages((prev) =>
+                              prev.map((row) =>
+                                row.id === m.id
+                                  ? { ...row, planNotice: null, content: `${row.content}\n\n${note}` }
+                                  : row,
+                              ),
+                            );
+                            refreshPendingCount();
+                          }}
+                        />
+                      ) : null}
+                      {m.planMatches && m.planMatches.length > 0 ? (
+                        <PlanMatchActions
+                          plans={m.planMatches}
+                          onResolved={(planId, note) => {
+                            setMessages((prev) =>
+                              prev.map((row) =>
+                                row.id === m.id
+                                  ? {
+                                      ...row,
+                                      planMatches: row.planMatches?.filter((plan) => plan.planId !== planId),
+                                      content: `${row.content}\n\n${note}`,
+                                    }
+                                  : row,
+                              ),
+                            );
+                            refreshPendingCount();
+                          }}
+                        />
+                      ) : null}
 
                       {m.role === "assistant" && m.id !== "welcome" ? (
                         <div className="flex items-center gap-1 pl-1">

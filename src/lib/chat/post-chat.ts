@@ -1,4 +1,4 @@
-import type { PendingDocumentImport, PendingLedgerEdit } from "@/types/chat";
+import type { PendingDocumentImport, PendingLedgerEdit, PlanChatAction } from "@/types/chat";
 
 export type ChatApiSuccess = {
   ok: true;
@@ -7,6 +7,10 @@ export type ChatApiSuccess = {
   followUpQuestion?: string | null;
   pendingDocumentImport?: PendingDocumentImport;
   pendingLedgerEdit?: PendingLedgerEdit;
+  planCreated?: boolean;
+  planId?: string;
+  planNotice?: PlanChatAction;
+  planMatches?: PlanChatAction[];
 };
 
 export type ChatApiFailure = { ok: false; error: string };

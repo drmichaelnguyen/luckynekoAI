@@ -178,7 +178,11 @@ export async function ensureFinanceSeed(db: PrismaClient, userId: string): Promi
   });
 }
 
-export async function financeContextLines(db: PrismaClient, userId: string): Promise<string> {
+export async function financeContextLines(
+  db: PrismaClient,
+  userId: string,
+  options?: { forLookup?: boolean },
+): Promise<string> {
   try {
     await ensureFinanceSeed(db, userId);
     const settings = await loadAdminRuntimeSettings();
@@ -271,7 +275,9 @@ export async function financeContextLines(db: PrismaClient, userId: string): Pro
       plans.length === 0
         ? ["FINANCIAL PLANS: (none — user can add spending or saving plans under Tools → Plans.)"]
         : [
-            "FINANCIAL PLANS (respect when advising; amounts in cents when listed):",
+            options?.forLookup
+              ? "FINANCIAL PLANS (PLANNED, NOT PURCHASED — these are not ledger transactions):"
+              : "FINANCIAL PLANS (respect when advising; amounts in cents when listed):",
             ...plans.map((p) => {
               const amt = p.amountCents != null ? `${p.amountCents} ${p.currency}` : "no fixed amount";
               const per = p.period !== "none" ? ` period:${p.period}` : "";

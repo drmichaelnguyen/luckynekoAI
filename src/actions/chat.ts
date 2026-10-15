@@ -31,6 +31,7 @@ import {
   recentTransactionsContextBlock,
   searchLedger,
 } from "@/lib/finance/ledger-query";
+import { applyPlanSuggestion } from "@/lib/finance/plan-suggestion";
 import { financeContextLines } from "@/lib/finance/seed";
 import {
   detectLanguageFromMessage,
@@ -341,7 +342,9 @@ Purchase intent — CRITICAL:
 - For purchase intents: set documentKind "freeform_transaction", set transaction to null (nothing bought), and populate planSuggestion with: title (short item name like "Buy iPhone 15"), description (optional context from user), amountCents (item price in cents if mentioned, else null), currency (use the default wallet currency from WALLETS context), period "none".
 - In assistantMessage for purchase intents, always do all four of these: (1) Confirm you've noted it as a planned purchase in their plans. (2) State their wallet balances from the WALLET BALANCES provided in the context. (3) Ask: "Before I can assess the risk, are there other expenses you're expecting before month end that haven't been logged yet — like rent, utilities, food, or anything else?" (4) If you know both the wallet balance and the item cost, give a brief risk note — comfortable (balance > 3× cost), manageable (1–3× cost), tight (< 1× cost).
 - Do NOT set planSuggestion if the user already bought the item (past tense: "I bought", "I spent", "I paid") — use the normal transaction flow instead.
+- If the message is just an item and price with no intent wording, treat it as a completed purchase (freeform_transaction), not a plan. Only use planSuggestion when intent wording is explicit.
 - Do NOT set both transaction and planSuggestion at the same time.
+- Plans labeled PLANNED, NOT PURCHASED are not transactions. Never describe them as something the user already bought.
 
 assistantMessage should be a concise, human summary of what you understood (1-3 sentences), not raw JSON.`;
 
@@ -811,10 +814,12 @@ export async function handleChatInput(formData: FormData) {
     });
     const ledgerNotFound =
       ledgerSearchAttempt != null &&
+      ledgerSearchAttempt.result.txCount === 0 &&
       (ledgerSearchAttempt.formattedText.includes("couldn't find") ||
         ledgerSearchAttempt.formattedText.includes("could not find") ||
         ledgerSearchAttempt.formattedText.includes("không tìm thấy"));
-    if (ledgerSearchAttempt && !ledgerNotFound) {
+    const planFallback = ledgerSearchAttempt != null && ledgerSearchAttempt.plans.length > 0 && ledgerSearchAttempt.result.txCount === 0;
+    if (ledgerSearchAttempt && (!ledgerNotFound || planFallback)) {
       const routerModels = chooseChatRouterModels({
         hasAttachments: false,
         message,
@@ -823,8 +828,9 @@ export async function handleChatInput(formData: FormData) {
         miniModel: adminSettings.routing.nineRouterMiniModel,
         largeModel: adminSettings.routing.nineRouterModel,
       });
-      const assistantMessage = has9RouterConfig()
-        ? await synthesizeLedgerAnswer({
+      const assistantMessage = planFallback || !has9RouterConfig()
+        ? ledgerSearchAttempt.formattedText
+        : await synthesizeLedgerAnswer({
             userId,
             userMessage: message,
             responseLanguage,
@@ -834,8 +840,7 @@ export async function handleChatInput(formData: FormData) {
             templateFallback: ledgerSearchAttempt.formattedText,
             nineRouterUrl: adminSettings.routing.nineRouterUrl,
             models: routerModels,
-          })
-        : ledgerSearchAttempt.formattedText;
+          });
 
       detectAndSaveChatPreferences(
         prisma,
@@ -860,6 +865,16 @@ export async function handleChatInput(formData: FormData) {
           },
         },
         followUpQuestion: null,
+        ...(ledgerSearchAttempt.plans.length > 0
+          ? {
+              planMatches: ledgerSearchAttempt.plans.map((plan) => ({
+                planId: plan.id,
+                title: plan.title,
+                amountCents: plan.amountCents,
+                currency: plan.currency,
+              })),
+            }
+          : {}),
       };
     }
   }
@@ -895,7 +910,9 @@ export async function handleChatInput(formData: FormData) {
     }
   }
 
-  let financeContext = await financeContextLines(prisma, userId);
+  let financeContext = await financeContextLines(prisma, userId, {
+    forLookup: Boolean(message && looksLikeLedgerLookupRequest(message)),
+  });
   if (files.length === 0 && message) {
     const userPrefs = await prisma.user.findUnique({
       where: { id: userId },
@@ -1703,6 +1720,7 @@ export async function handleChatInput(formData: FormData) {
     }
 
     let planCreated = false;
+    let createdPlan: { planId: string; title: string; amountCents: number | null; currency: string } | null = null;
     if (
       data.planSuggestion &&
       typeof data.planSuggestion === "object" &&
@@ -1710,23 +1728,31 @@ export async function handleChatInput(formData: FormData) {
     ) {
       const ps = data.planSuggestion;
       try {
-        const planDelegate = (prisma as unknown as { financialPlan?: { create: (args: unknown) => Promise<unknown> } })
-          .financialPlan;
-        if (planDelegate?.create) {
-          await planDelegate.create({
-            data: {
-              userId,
-              kind: "spending_budget",
-              title: ps.title.trim().slice(0, 200),
-              description: ps.description?.trim().slice(0, 2000) ?? null,
-              amountCents: typeof ps.amountCents === "number" ? Math.round(ps.amountCents) : null,
-              currency: ((ps.currency ?? "CAD").toUpperCase().slice(0, 3)),
-              period: ps.period ?? "none",
-              targetDate: ps.targetDate ? new Date(ps.targetDate) : null,
-              sortOrder: 0,
-            },
-          });
+        const applied = await applyPlanSuggestion(prisma, userId, message, {
+          title: ps.title,
+          description: ps.description ?? null,
+          amountCents: ps.amountCents ?? null,
+          currency: ps.currency ?? null,
+          period: ps.period ?? null,
+          targetDate: ps.targetDate ?? null,
+        });
+        if (applied.outcome === "plan") {
           planCreated = true;
+          createdPlan = {
+            planId: applied.planId,
+            title: applied.title,
+            amountCents: applied.amountCents,
+            currency: applied.currency,
+          };
+        } else if (applied.outcome === "draft" && applied.detail) {
+          assistantMessage = `${assistantMessage}\n\n${applied.detail}`;
+        } else if (applied.outcome === "follow_up") {
+          followUpQuestion = applied.followUpQuestion;
+          if (/\b(saved|added)\b/i.test(assistantMessage)) {
+            assistantMessage = "I didn't save a plan or a transaction yet.";
+          }
+        } else if (applied.outcome === "error") {
+          assistantMessage = `${assistantMessage}\n\n${applied.error}`;
         }
       } catch {
         /* best-effort — chat reply still returns */
@@ -1802,7 +1828,9 @@ export async function handleChatInput(formData: FormData) {
       followUpQuestion,
       ...(pendingDocumentImport ? { pendingDocumentImport } : {}),
       ...(pendingLedgerEdit ? { pendingLedgerEdit } : {}),
-      ...(planCreated ? { planCreated: true as const } : {}),
+      ...(planCreated && createdPlan
+        ? { planCreated: true as const, planId: createdPlan.planId, planNotice: createdPlan }
+        : {}),
       ...(pendingRecurrenceApplied ? { pendingRecurrenceApplied } : {}),
     };
   } catch (error) {

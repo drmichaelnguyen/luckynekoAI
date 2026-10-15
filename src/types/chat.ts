@@ -6,6 +6,13 @@ export type ChatAttachmentMeta = {
   mimeType: string;
 };
 
+export type PlanChatAction = {
+  planId: string;
+  title: string;
+  amountCents: number | null;
+  currency: string;
+};
+
 export type ChatMessage = {
   id: string;
   role: ChatRole;
@@ -13,6 +20,8 @@ export type ChatMessage = {
   attachments?: ChatAttachmentMeta[];
   structuredJson?: string;
   replyFeedback?: ChatReplyFeedbackRating;
+  planNotice?: PlanChatAction | null;
+  planMatches?: PlanChatAction[];
 };
 
 export type ReceiptSplitItem = {
@@ -71,6 +80,10 @@ export type ChatActionSuccess = {
   pendingDocumentImport?: PendingDocumentImport;
   /** Present when the assistant staged a bulk ledger edit for explicit confirmation. */
   pendingLedgerEdit?: PendingLedgerEdit;
+  planCreated?: boolean;
+  planId?: string;
+  planNotice?: PlanChatAction;
+  planMatches?: PlanChatAction[];
 };
 
 export type ChatActionFailure = {

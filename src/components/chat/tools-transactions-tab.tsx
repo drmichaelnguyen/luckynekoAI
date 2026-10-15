@@ -4,9 +4,11 @@ import { CalendarDays, ChevronRight, FolderTree, Loader2, Search, Tags, Wallet }
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 
 import { searchTransactionsGroupedAction } from "@/actions/finance";
-import type { LedgerSearchRow, WalletTransactionGroup } from "@/lib/finance/ledger-query";
+import { convertPlanToTransactionAction } from "@/actions/financial-plans";
+import type { LedgerPlanHit, LedgerSearchRow, WalletTransactionGroup } from "@/lib/finance/ledger-query";
 import { formatMoneyFromCents } from "@/lib/finance/amount-cents";
 import { TransactionDetailDrawer } from "@/components/chat/transaction-detail-drawer";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
@@ -215,6 +217,7 @@ export function ToolsTransactionsTab() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [groups, setGroups] = useState<WalletTransactionGroup[]>([]);
+  const [plans, setPlans] = useState<LedgerPlanHit[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [displayCurrency, setDisplayCurrency] = useState("CAD");
   const [error, setError] = useState<string | null>(null);
@@ -235,10 +238,12 @@ export function ToolsTransactionsTab() {
       if (!r.ok) {
         setError(r.error);
         setGroups([]);
+        setPlans([]);
         setTotalCount(0);
         return;
       }
       setGroups(r.groups);
+      setPlans(r.plans ?? []);
       setTotalCount(r.totalCount);
       setDisplayCurrency(r.displayCurrency);
     });
@@ -285,9 +290,37 @@ export function ToolsTransactionsTab() {
       ) : null}
 
       {!loading && groups.length === 0 ? (
-        <p className="rounded-lg border bg-muted/30 px-3 py-4 text-center text-xs text-muted-foreground">
-          {debouncedSearch ? "No transactions match your search." : "No transactions in your ledger yet."}
-        </p>
+        <div className="space-y-2">
+          <p className="rounded-lg border bg-muted/30 px-3 py-4 text-center text-xs text-muted-foreground">
+            {plans.length > 0 && debouncedSearch
+              ? `Not found in transactions, but you have a planned purchase: ${plans.map((plan) => plan.title).join("; ")}.`
+              : debouncedSearch
+                ? "No transactions match your search."
+                : "No transactions in your ledger yet."}
+          </p>
+          {plans.map((plan) => (
+            <div key={plan.id} className="flex items-center justify-between gap-2 rounded-lg border bg-card px-3 py-2 text-xs">
+              <span className="font-medium">{plan.title}</span>
+              <Button
+                type="button"
+                size="sm"
+                disabled={loading || plan.amountCents == null}
+                onClick={() => {
+                  startTransition(async () => {
+                    const result = await convertPlanToTransactionAction(plan.id);
+                    if (!result.ok) {
+                      setError(result.error);
+                      return;
+                    }
+                    load(debouncedSearch);
+                  });
+                }}
+              >
+                Mark as bought
+              </Button>
+            </div>
+          ))}
+        </div>
       ) : (
         <div className="space-y-3">
           {treeGroups.map((group) => {
