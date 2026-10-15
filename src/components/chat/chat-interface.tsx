@@ -31,7 +31,6 @@ import { packFinancialConversationAction } from "@/actions/chat-pack-context";
 import {
   acknowledgeShareImportAction,
   getShareImportAction,
-  handleChatInput,
   reportChatClientDebugAction,
 } from "@/actions/chat";
 import { recordChatReplyFeedbackAction } from "@/actions/chat-feedback";
@@ -61,10 +60,17 @@ import {
   messageToTurnForApi,
   recentPriorTurnsForApi,
 } from "@/lib/chat/conversation-context";
+import {
+  friendlyChatTransportError,
+  PROCESS_RETRY_USER_MESSAGE,
+  postChatFormData,
+  UPLOAD_RETRY_USER_MESSAGE,
+} from "@/lib/chat/post-chat";
 import { localCalendarYmd } from "@/lib/date/local-ymd";
 import { useDailySpendCheckin } from "@/hooks/use-daily-spend-checkin";
 import { useVoiceChat } from "@/hooks/use-voice-chat";
 import type { Locale } from "@/lib/i18n/config";
+import { prepareOutgoingFiles } from "@/lib/media/stabilize-file-client";
 import { cn } from "@/lib/utils";
 
 function randomId() {
@@ -190,6 +196,8 @@ export function ChatInterface() {
   const [packedFinancialSummary, setPackedFinancialSummary] = useState("");
   const [packedThroughIndex, setPackedThroughIndex] = useState(0);
   const [replyFeedbackBusyId, setReplyFeedbackBusyId] = useState<string | null>(null);
+  const [composerUploadError, setComposerUploadError] = useState<string | null>(null);
+  const [preparingAttachments, setPreparingAttachments] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -348,7 +356,10 @@ export function ChatInterface() {
         }
 
         const restored = result.payload.parts.map((part) => base64ToFile(part));
-        setFiles((prev) => [...restored, ...prev]);
+        const stabilized = await prepareOutgoingFiles(restored);
+        if (cancelled) return;
+        setFiles((prev) => [...stabilized, ...prev]);
+        setComposerUploadError(null);
 
         setShareContext({
           title: result.payload.title,
@@ -386,7 +397,19 @@ export function ChatInterface() {
 
   const onPickFiles = (picked: FileList | null) => {
     if (!picked || picked.length === 0) return;
-    setFiles((prev) => [...prev, ...Array.from(picked)]);
+    const selected = Array.from(picked);
+    setComposerUploadError(null);
+    setPreparingAttachments(true);
+    void prepareOutgoingFiles(selected)
+      .then((prepared) => {
+        setFiles((prev) => [...prev, ...prepared]);
+      })
+      .catch(() => {
+        setFiles((prev) => [...prev, ...selected]);
+      })
+      .finally(() => {
+        setPreparingAttachments(false);
+      });
   };
 
   const onPasteComposer = (event: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -409,7 +432,18 @@ export function ChatInterface() {
     if (!pastedText.trim()) {
       event.preventDefault();
     }
-    setFiles((prev) => [...prev, ...imageFiles]);
+    setComposerUploadError(null);
+    setPreparingAttachments(true);
+    void prepareOutgoingFiles(imageFiles)
+      .then((prepared) => {
+        setFiles((prev) => [...prev, ...prepared]);
+      })
+      .catch(() => {
+        setFiles((prev) => [...prev, ...imageFiles]);
+      })
+      .finally(() => {
+        setPreparingAttachments(false);
+      });
   };
 
   const removeFileAt = (index: number) => {
@@ -437,6 +471,8 @@ export function ChatInterface() {
       }
 
       setChatBusy(true);
+      setComposerUploadError(null);
+      const hadFiles = outgoingFiles.length > 0;
       try {
         const hist = historyWithoutWelcome(snapshotMessages);
         const userMessage: ChatMessage = {
@@ -505,16 +541,8 @@ export function ChatInterface() {
           formData.set("shareContext", JSON.stringify(outgoingShare));
         }
 
-        const result = (await handleChatInput(formData)) as
-          | {
-              ok: true;
-              assistantMessage: string;
-              structured: unknown;
-              followUpQuestion?: string | null;
-              pendingDocumentImport?: PendingDocumentImport;
-              pendingLedgerEdit?: PendingLedgerEdit;
-            }
-          | { ok: false; error: string };
+        // JSON API route — avoids Server Action RSC failures on large mobile uploads.
+        const result = await postChatFormData(formData, { hadFiles });
 
         if (packedThisRound) {
           setPackedFinancialSummary(summary);
@@ -530,6 +558,9 @@ export function ChatInterface() {
               content: result.error,
             },
           ]);
+          if (hadFiles) {
+            setComposerUploadError(PROCESS_RETRY_USER_MESSAGE);
+          }
           return { ok: false, error: result.error, restoreComposer: true };
         }
 
@@ -560,6 +591,7 @@ export function ChatInterface() {
         } else {
           setPendingLedgerEdit(null);
         }
+        setComposerUploadError(null);
         refreshPendingCount();
         return { ok: true, speakText: spoken };
       } catch (e) {
@@ -583,10 +615,7 @@ export function ChatInterface() {
           },
         });
         // #endregion
-        const hint =
-          base.includes("Body") || base.includes("413") || base.toLowerCase().includes("mb")
-            ? `${base}\n\nTip: camera photos are often several MB — this app needs the full image under the configured upload limit. Try exporting a smaller JPEG.`
-            : base;
+        const hint = friendlyChatTransportError(base, hadFiles);
         setMessages((prev) => [
           ...prev,
           {
@@ -595,6 +624,9 @@ export function ChatInterface() {
             content: hint,
           },
         ]);
+        if (hadFiles) {
+          setComposerUploadError(UPLOAD_RETRY_USER_MESSAGE);
+        }
         return { ok: false, error: hint, restoreComposer: true };
       } finally {
         setChatBusy(false);
@@ -631,6 +663,7 @@ export function ChatInterface() {
   const submit = () => {
     const trimmed = draft.trim();
     if (!trimmed && files.length === 0) return;
+    if (preparingAttachments || chatBusy || isPending) return;
 
     if (voice.mode !== "off") {
       voice.stopConversation();
@@ -645,6 +678,7 @@ export function ChatInterface() {
     setDraft("");
     setFiles([]);
     setShareContext(undefined);
+    setComposerUploadError(null);
 
     startTransition(() => {
       void (async () => {
@@ -984,7 +1018,10 @@ export function ChatInterface() {
                   <button
                     key={`${file.name}-${idx}`}
                     type="button"
-                    onClick={() => removeFileAt(idx)}
+                    onClick={() => {
+                      removeFileAt(idx);
+                      setComposerUploadError(null);
+                    }}
                     className="max-w-full truncate rounded-full border bg-secondary px-3 py-1 text-xs text-secondary-foreground hover:bg-secondary/80"
                     title="Remove attachment"
                   >
@@ -992,6 +1029,26 @@ export function ChatInterface() {
                   </button>
                 ))}
               </div>
+            ) : null}
+            {composerUploadError && files.length > 0 ? (
+              <div
+                role="alert"
+                className="mb-1.5 flex flex-col gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive sm:flex-row sm:items-center sm:justify-between"
+              >
+                <p className="leading-snug">{composerUploadError}</p>
+                <button
+                  type="button"
+                  onClick={submit}
+                  disabled={isPending || chatBusy || preparingAttachments}
+                  className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-destructive/40 bg-background px-2.5 py-1.5 font-medium text-destructive transition hover:bg-destructive/5 disabled:opacity-50"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Retry upload
+                </button>
+              </div>
+            ) : null}
+            {preparingAttachments ? (
+              <p className="mb-1.5 text-[11px] text-muted-foreground">Preparing attachment…</p>
             ) : null}
 
             {failedSendError && files.length > 0 ? (
@@ -1134,12 +1191,17 @@ export function ChatInterface() {
                     type="button"
                     id="composer-send"
                     onClick={submit}
-                    disabled={isPending || chatBusy || !(draft.trim() || files.length > 0)}
+                    disabled={
+                      isPending ||
+                      chatBusy ||
+                      preparingAttachments ||
+                      !(draft.trim() || files.length > 0)
+                    }
                     aria-label="Send message"
                     title="Send"
                     className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed"
                   >
-                    {isPending || chatBusy ? (
+                    {isPending || chatBusy || preparingAttachments ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
                       <SendHorizontal className="h-4 w-4" />
