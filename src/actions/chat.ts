@@ -7,6 +7,14 @@ import { z } from "zod";
 
 import { PENDING_IMPORT_VERSION } from "@/lib/document-import/pending-import-shared";
 import { auth } from "@/auth";
+import {
+  formatLookupContext,
+  formatPlannedPurchaseFallback,
+  parseLedgerQuery,
+  searchLedgerText,
+  type LedgerPlanHit,
+} from "@/lib/finance/ledger-query";
+import { applyPlanSuggestion, type PlanSuggestionInput } from "@/lib/finance/plan-suggestion";
 import { persistFreeformLedgerEntry } from "@/lib/finance/persist-from-chat";
 import { financeContextLines } from "@/lib/finance/seed";
 import { maybeCompressImageForStorage } from "@/lib/media/compress-image-for-storage";
@@ -41,6 +49,18 @@ const GeminiResponseSchema = z
     paystub: z.record(z.string(), z.unknown()).nullable().optional(),
     assistantMessage: z.string(),
     followUpQuestion: z.union([z.string(), z.null()]).optional(),
+    planSuggestion: z
+      .object({
+        title: z.string().min(1).max(200),
+        description: z.string().max(2000).nullable().optional(),
+        amountCents: z.number().nullable().optional(),
+        amount: z.number().nullable().optional(),
+        currency: z.string().max(8).nullable().optional(),
+        kind: z.enum(["spending_budget", "savings_goal"]).nullable().optional(),
+      })
+      .nullable()
+      .optional()
+      .catch(undefined),
     /** Plain-language readout of what appears on the uploaded bill/receipt/paystub (required for financial uploads). */
     extractedTextSummary: z.union([z.string(), z.null()]).optional(),
     /** When true with a financial document upload, the app waits for explicit user ADD/EDIT before writing the ledger. */
@@ -86,7 +106,14 @@ Your JSON MUST match this shape (optional keys only when relevant):
   "assistantMessage": string,
   "followUpQuestion": string | null,
   "extractedTextSummary": string | null,
-  "awaitingLedgerDecision": boolean
+  "awaitingLedgerDecision": boolean,
+  "planSuggestion": null | {
+    "title": string,
+    "description": string | null,
+    "amountCents": number | null,
+    "currency": string | null,
+    "kind": "spending_budget" | "savings_goal"
+  }
 }
 
 Rules:
@@ -122,6 +149,9 @@ Bookkeeping rules for freeform_transaction:
 - When the user describes everyday shopping, use recurrence "one_time" and needsUserConfirm false unless unclear.
 - For rent, mortgage, car loan, BNPL, phone plan, streaming, insurance, or utilities, prefer recurrence "recurrent" or "unknown" with needsUserConfirm true and a friendly userConfirmReason.
 - Always pick the closest category from the provided list; if none fit, use "Other".
+- Purchase intent (want to, planning, thinking of, should I, can I afford, going to, will buy) becomes planSuggestion with kind "spending_budget", not a transaction. Past tense ("I bought" / "I paid" / purchased) becomes a freeform_transaction, not a plan.
+- If the message is just an item and price with no intent wording, treat it as a completed purchase (freeform_transaction), not a plan. Only use planSuggestion when intent wording is explicit.
+- Plans listed as PLANNED, NOT PURCHASED are not transactions. Never describe them as something the user already bought.
 
 Receipt object fields (use null for unknown):
 - total: number | null
@@ -320,7 +350,18 @@ export async function handleChatInput(formData: FormData) {
     }
   }
 
-  const financeContext = await financeContextLines(prisma, session.user.id);
+  const ledgerQuery = message ? parseLedgerQuery(message) : null;
+  let financeContext = await financeContextLines(prisma, session.user.id, {
+    forLookup: Boolean(ledgerQuery),
+  });
+  let lookupPlans: LedgerPlanHit[] = [];
+  let lookupHadTransactions = false;
+  if (ledgerQuery) {
+    const found = await searchLedgerText(prisma, session.user.id, message);
+    lookupPlans = found.plans;
+    lookupHadTransactions = found.transactions.length > 0;
+    financeContext = `${financeContext}\n\n${formatLookupContext(found)}`;
+  }
 
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!apiKey) {
@@ -578,7 +619,48 @@ export async function handleChatInput(formData: FormData) {
           : `\n\n---\nFrom your file (readout):\n${pendingDocumentImport.extractedTextSummary}\n\n---\nUse the buttons under the chat to save this to your ledger as read, or edit details first. Edits are stored with the image for optional future training export.`;
       assistantMessage = `${assistantMessage}${pendingTail}`;
     }
+    let planCreated = false;
+    let createdPlan: { planId: string; title: string; amountCents: number | null; currency: string } | null = null;
+    let handledPlanSuggestion = false;
+
+    const suggestion = data.planSuggestion;
+    if (suggestion && typeof suggestion.title === "string" && suggestion.title.trim().length > 0) {
+      handledPlanSuggestion = true;
+      const input: PlanSuggestionInput = {
+        title: suggestion.title,
+        description: suggestion.description ?? null,
+        amountCents: suggestion.amountCents ?? null,
+        amount: suggestion.amount ?? null,
+        currency: suggestion.currency ?? null,
+        kind: suggestion.kind ?? null,
+      };
+      try {
+        const applied = await applyPlanSuggestion(prisma, session.user.id, message, input);
+        if (applied.outcome === "plan") {
+          planCreated = true;
+          createdPlan = {
+            planId: applied.planId,
+            title: applied.title,
+            amountCents: applied.amountCents,
+            currency: applied.currency,
+          };
+        } else if (applied.outcome === "draft") {
+          if (applied.detail) assistantMessage = `${assistantMessage}\n\n${applied.detail}`;
+        } else if (applied.outcome === "follow_up") {
+          followUpQuestion = applied.followUpQuestion;
+          if (/\b(saved|added)\b/i.test(assistantMessage)) {
+            assistantMessage = "I didn't save a plan or a transaction yet.";
+          }
+        } else if (applied.outcome === "error") {
+          assistantMessage = `${assistantMessage}\n\n${applied.error}`;
+        }
+      } catch {
+        /* plan guard is best-effort; chat reply still returns */
+      }
+    }
+
     if (
+      !handledPlanSuggestion &&
       data.documentKind === "freeform_transaction" &&
       data.transaction &&
       typeof data.transaction === "object" &&
@@ -615,11 +697,29 @@ export async function handleChatInput(formData: FormData) {
       }
     }
 
+    const plannedPurchaseNote =
+      ledgerQuery && !lookupHadTransactions ? formatPlannedPurchaseFallback(lookupPlans) : null;
+    if (plannedPurchaseNote) {
+      assistantMessage = `${assistantMessage}\n\n${plannedPurchaseNote}`;
+    }
+
     return {
       ok: true as const,
       assistantMessage,
       structured,
       followUpQuestion,
+      planCreated,
+      ...(createdPlan ? { planId: createdPlan.planId, planNotice: createdPlan } : {}),
+      ...(lookupPlans.length > 0
+        ? {
+            planMatches: lookupPlans.map((plan) => ({
+              planId: plan.id,
+              title: plan.title,
+              amountCents: plan.amountCents,
+              currency: plan.currency,
+            })),
+          }
+        : {}),
       ...(pendingDocumentImport ? { pendingDocumentImport } : {}),
     };
   } catch (error) {

@@ -16,6 +16,7 @@ import {
 } from "@/actions/finance";
 import { DashboardInsights } from "@/components/chat/dashboard-insights";
 import { ToolsPlansTab } from "@/components/chat/tools-plans-tab";
+import { ToolsTransactionsTab } from "@/components/chat/tools-transactions-tab";
 import { ToolsProfileTab } from "@/components/chat/tools-profile-tab";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +27,7 @@ export type AdvancedToolsTabId =
   | "dashboard"
   | "import"
   | "confirm"
+  | "transactions"
   | "wallets"
   | "plans"
   | "profile"
@@ -173,7 +175,7 @@ export function AdvancedToolsPanel({
               Advanced tools
             </h2>
             <p className="hidden text-xs text-muted-foreground sm:block">
-              Dashboard · import · confirm · wallets · plans · profile · backup
+              Dashboard · import · confirm · transactions · wallets · plans · profile · backup
             </p>
           </div>
           <Button
@@ -194,6 +196,7 @@ export function AdvancedToolsPanel({
               ["dashboard", "Dashboard"],
               ["import", "Import"],
               ["confirm", "Confirm"],
+              ["transactions", "Transactions"],
               ["wallets", "Wallets"],
               ["plans", "Plans"],
               ["profile", "Profile"],
@@ -373,6 +376,8 @@ export function AdvancedToolsPanel({
               )}
             </div>
           ) : null}
+
+          {tab === "transactions" ? <ToolsTransactionsTab /> : null}
 
           {tab === "wallets" ? (
             <div className="space-y-4 text-sm">

@@ -31,6 +31,7 @@ import {
   type AdvancedToolsTabId,
 } from "@/components/chat/advanced-tools-panel";
 import { DailySpendCheckinBanner } from "@/components/chat/daily-spend-checkin-banner";
+import { PlanMatchActions, PlannedPurchaseNotice } from "@/components/chat/planned-purchase-actions";
 import { DocumentImportBar } from "@/components/chat/document-import-bar";
 import { LuckyNekoAvatar, LuckyNekoMascot } from "@/components/mascot/lucky-neko";
 import { useLocale } from "@/contexts/locale-context";
@@ -410,14 +411,17 @@ export function ChatInterface() {
           parts.push(result.followUpQuestion);
         }
         const spoken = parts.join("\n");
+        const assistantId = randomId();
 
         setMessages((prev) => [
           ...prev,
           {
-            id: randomId(),
+            id: assistantId,
             role: "assistant",
             content: spoken,
             structuredJson,
+            planNotice: result.planCreated && result.planNotice ? result.planNotice : null,
+            planMatches: result.planMatches,
           },
         ]);
         if (result.pendingDocumentImport) {
@@ -679,6 +683,41 @@ export function ChatInterface() {
                           </div>
                         ) : null}
                       </div>
+
+                      {m.planNotice ? (
+                        <PlannedPurchaseNotice
+                          plan={m.planNotice}
+                          onResolved={(note) => {
+                            setMessages((prev) =>
+                              prev.map((row) =>
+                                row.id === m.id
+                                  ? { ...row, planNotice: null, content: `${row.content}\n\n${note}` }
+                                  : row,
+                              ),
+                            );
+                            refreshPendingCount();
+                          }}
+                        />
+                      ) : null}
+                      {m.planMatches && m.planMatches.length > 0 ? (
+                        <PlanMatchActions
+                          plans={m.planMatches}
+                          onResolved={(planId, note) => {
+                            setMessages((prev) =>
+                              prev.map((row) =>
+                                row.id === m.id
+                                  ? {
+                                      ...row,
+                                      planMatches: row.planMatches?.filter((plan) => plan.planId !== planId),
+                                      content: `${row.content}\n\n${note}`,
+                                    }
+                                  : row,
+                              ),
+                            );
+                            refreshPendingCount();
+                          }}
+                        />
+                      ) : null}
 
                       {m.structuredJson ? (
                         <details className="rounded-xl border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">

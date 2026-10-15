@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState, useTransition } from "react";
 
 import {
+  convertPlanToTransactionAction,
   deleteFinancialPlanAction,
   listFinancialPlansAction,
   upsertFinancialPlanAction,
@@ -94,7 +95,31 @@ export function ToolsPlansTab({ active, onChanged }: { active: boolean; onChange
                 </div>
                 {p.description ? <div className="mt-1 line-clamp-2">{p.description}</div> : null}
               </div>
-              <div className="flex shrink-0 gap-1">
+              <div className="flex shrink-0 flex-col items-end gap-1">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  className="h-7 px-2 text-[11px]"
+                  disabled={isPending || p.amountCents == null}
+                  onClick={() => {
+                    setMsg(null);
+                    startTransition(() => {
+                      void (async () => {
+                        const r = await convertPlanToTransactionAction(p.id);
+                        if (r.ok) {
+                          load();
+                          onChanged?.();
+                          if (editingId === p.id) resetForm();
+                          setMsg("Marked as bought.");
+                        } else setMsg(r.error);
+                      })();
+                    });
+                  }}
+                >
+                  Mark as bought
+                </Button>
+                <div className="flex gap-1">
                 <Button type="button" size="icon" variant="ghost" className="h-8 w-8" onClick={() => startEdit(p)} aria-label="Edit">
                   <Pencil className="h-3.5 w-3.5" />
                 </Button>
@@ -120,6 +145,7 @@ export function ToolsPlansTab({ active, onChanged }: { active: boolean; onChange
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>
+                </div>
               </div>
             </li>
           ))}
