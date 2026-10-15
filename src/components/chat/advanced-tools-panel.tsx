@@ -10,9 +10,11 @@ import { getLedgerDashboardAction } from "@/actions/dashboard";
 import {
   confirmTransactionAction,
   createWalletAction,
+  listDeletedTransactionsAction,
   listPendingTransactionsAction,
   listWalletsAction,
   rejectPendingTransactionAction,
+  restoreDeletedTransactionAction,
 } from "@/actions/finance";
 import { DashboardInsights } from "@/components/chat/dashboard-insights";
 import { ToolsPlansTab } from "@/components/chat/tools-plans-tab";
@@ -26,6 +28,7 @@ export type AdvancedToolsTabId =
   | "dashboard"
   | "import"
   | "confirm"
+  | "deleted"
   | "wallets"
   | "plans"
   | "profile"
@@ -102,6 +105,22 @@ export function AdvancedToolsPanel({
       categoryName: string;
     }>
   >([]);
+  const [deleted, setDeleted] = useState<
+    Array<{
+      id: string;
+      amountCents: number;
+      direction: string;
+      currency: string;
+      merchant: string | null;
+      memo: string | null;
+      occurredAt: string;
+      deletedAt: string;
+      walletName: string;
+      categoryName: string;
+      walletMissing: boolean;
+    }>
+  >([]);
+  const [deletedMsg, setDeletedMsg] = useState<string | null>(null);
   const [walletName, setWalletName] = useState("");
   const [backupMsg, setBackupMsg] = useState<string | null>(null);
   const [restoreConfirm, setRestoreConfirm] = useState(false);
@@ -112,9 +131,14 @@ export function AdvancedToolsPanel({
   const refresh = useCallback(() => {
     startTransition(() => {
       void (async () => {
-        const [w, p] = await Promise.all([listWalletsAction(), listPendingTransactionsAction()]);
+        const [w, p, d] = await Promise.all([
+          listWalletsAction(),
+          listPendingTransactionsAction(),
+          listDeletedTransactionsAction(),
+        ]);
         if (w.ok) setWallets(w.wallets);
         if (p.ok) setPending(p.rows);
+        if (d.ok) setDeleted(d.rows);
         onBooksChanged?.();
       })();
     });
@@ -173,7 +197,7 @@ export function AdvancedToolsPanel({
               Advanced tools
             </h2>
             <p className="hidden text-xs text-muted-foreground sm:block">
-              Dashboard · import · confirm · wallets · plans · profile · backup
+              Dashboard · import · confirm · deleted · wallets · plans · profile · backup
             </p>
           </div>
           <Button
@@ -194,6 +218,7 @@ export function AdvancedToolsPanel({
               ["dashboard", "Dashboard"],
               ["import", "Import"],
               ["confirm", "Confirm"],
+              ["deleted", "Deleted"],
               ["wallets", "Wallets"],
               ["plans", "Plans"],
               ["profile", "Profile"],
@@ -217,6 +242,11 @@ export function AdvancedToolsPanel({
                   {pending.length}
                 </span>
               ) : null}
+              {id === "deleted" && deleted.length > 0 ? (
+                <span className="ml-1 rounded-full bg-muted px-1.5 text-[10px] font-medium text-muted-foreground">
+                  {deleted.length}
+                </span>
+              ) : null}
             </Button>
           ))}
         </div>
@@ -228,6 +258,10 @@ export function AdvancedToolsPanel({
               onRangeChange={setDashboardRange}
               data={dashboardData}
               loading={dashboardLoading}
+              onLedgerChanged={() => {
+                loadDashboard(dashboardRange);
+                refresh();
+              }}
             />
           ) : null}
 
@@ -374,6 +408,67 @@ export function AdvancedToolsPanel({
             </div>
           ) : null}
 
+          {tab === "deleted" ? (
+            <div className="space-y-3 text-sm">
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Transactions you delete are stored here instead of being erased. Restore puts the same row back on
+                your ledger.
+              </p>
+              {deletedMsg ? (
+                <p className="rounded-lg border bg-muted/40 px-3 py-2 text-xs whitespace-pre-wrap">{deletedMsg}</p>
+              ) : null}
+              {deleted.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No deleted transactions.</p>
+              ) : (
+                <ul className="space-y-3">
+                  {deleted.map((t) => (
+                    <li key={t.id} className="rounded-xl border bg-card p-3 text-xs shadow-sm">
+                      <div className="font-medium text-foreground">
+                        {formatMoney(t.amountCents, t.currency)} {t.direction === "out" ? "out" : "in"} · {t.walletName}
+                      </div>
+                      <div className="mt-1 text-muted-foreground">
+                        {(t.merchant || t.memo || "No description") + ` · ${t.categoryName}`}
+                      </div>
+                      <div className="mt-1 text-muted-foreground">
+                        {t.occurredAt.slice(0, 10)} · deleted {t.deletedAt.slice(0, 10)}
+                      </div>
+                      {t.walletMissing ? (
+                        <p className="mt-2 text-[11px] text-destructive">
+                          The wallet for this transaction no longer exists, so it cannot be restored.
+                        </p>
+                      ) : (
+                        <div className="mt-3">
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={isPending}
+                            onClick={() => {
+                              setDeletedMsg(null);
+                              startTransition(() => {
+                                void (async () => {
+                                  const r = await restoreDeletedTransactionAction(t.id);
+                                  if (!r.ok) {
+                                    setDeletedMsg(r.error);
+                                    return;
+                                  }
+                                  setDeletedMsg("Restored to your ledger.");
+                                  refresh();
+                                  loadDashboard(dashboardRange);
+                                })();
+                              });
+                            }}
+                          >
+                            Restore
+                          </Button>
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ) : null}
+
           {tab === "wallets" ? (
             <div className="space-y-4 text-sm">
               <p className="text-xs text-muted-foreground">
@@ -432,7 +527,8 @@ export function AdvancedToolsPanel({
           {tab === "backup" ? (
             <div className="space-y-4 text-sm">
               <p className="text-xs leading-relaxed text-muted-foreground">
-                Your wallets, categories, transactions, recurring series, import batches, financial plans, and{" "}
+                Your wallets, categories, transactions (including deleted ones you can still restore), recurring series,
+                import batches, financial plans, and{" "}
                 <span className="font-medium text-foreground">saved receipt / image uploads</span> from chat live
                 under your account. Download JSON (ledger only) or a full ZIP (ledger + files + a training manifest).
                 Restore only from exports you made while signed in with the{" "}
@@ -521,7 +617,7 @@ export function AdvancedToolsPanel({
               <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-3">
                 <div className="text-xs font-medium text-destructive">Restore from backup</div>
                 <p className="mt-1 text-[11px] text-muted-foreground">
-                  Replaces all wallets, categories, transactions, batches, and recurring series. A{" "}
+                  Replaces all wallets, categories, transactions, deleted transactions, batches, and recurring series. A{" "}
                   <span className="font-medium text-foreground">.zip</span> from “full backup” also replaces saved
                   chat images/PDFs for this account. Cannot be undone.
                 </p>
