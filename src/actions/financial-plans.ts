@@ -3,6 +3,7 @@
 import { z } from "zod";
 
 import { auth } from "@/auth";
+import { convertPlanToTransaction } from "@/lib/finance/convert-plan";
 import { prisma } from "@/lib/prisma";
 
 const PlanKindSchema = z.enum(["spending_budget", "savings_goal"]);
@@ -136,6 +137,25 @@ export async function upsertFinancialPlanAction(formData: FormData): Promise<
     },
   });
   return { ok: true };
+}
+
+export async function convertPlanToTransactionAction(
+  planId: string,
+  options?: { occurredAt?: string; walletId?: string; categoryId?: string },
+): Promise<{ ok: true; transactionId: string } | { ok: false; error: string }> {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false, error: "Unauthorized." };
+  let occurredAt: Date | undefined;
+  if (options?.occurredAt) {
+    const parsed = new Date(options.occurredAt);
+    if (Number.isNaN(parsed.getTime())) return { ok: false, error: "Invalid date." };
+    occurredAt = parsed;
+  }
+  return convertPlanToTransaction(prisma, session.user.id, planId, {
+    occurredAt,
+    walletId: options?.walletId,
+    categoryId: options?.categoryId,
+  });
 }
 
 export async function deleteFinancialPlanAction(id: string): Promise<{ ok: true } | { ok: false; error: string }> {
