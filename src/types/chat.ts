@@ -22,6 +22,8 @@ export type ChatMessage = {
   replyFeedback?: ChatReplyFeedbackRating;
   planNotice?: PlanChatAction | null;
   planMatches?: PlanChatAction[];
+  /** Composer mode used when the user sent this turn. */
+  mode?: "record" | "ask";
 };
 
 export type ReceiptSplitItem = {

@@ -22,6 +22,15 @@ import {
 import { recordAiRequestLog, usageFromGeminiResult, type AiUsageMetrics } from "@/lib/ai/telemetry";
 import { loadAdminRuntimeSettings, resolveProviderChoice } from "@/lib/admin-runtime-settings";
 import { getLedgerDashboardAction, type DashboardRange } from "@/actions/dashboard";
+import {
+  chatModeSystemAddendum,
+  mismatchAssistantMessage,
+  mismatchFollowUp,
+  modelProposedLedgerWrite,
+  parseChatMode,
+  type ChatMode,
+} from "@/lib/chat/chat-mode";
+import { ledgerSnapshotLines } from "@/lib/finance/ledger-snapshot";
 import { persistFreeformLedgerEntry, applyLedgerEdit, previewLedgerEdit, resolveTransactionNotes } from "@/lib/finance/persist-from-chat";
 import { persistPaystubLedgerEntry } from "@/lib/finance/persist-receipt-paystub";
 import { enrichReceiptWithLineItemCategories } from "@/lib/finance/line-item-category";
@@ -163,6 +172,10 @@ const GeminiResponseSchema = z
       .nullable()
       .optional(),
     requiresComplexReasoning: z.boolean().optional(),
+    /** True when the message does not match the composer mode, or the model is unsure. */
+    intentMismatch: z.boolean().optional(),
+    /** Mode the user should switch to when intentMismatch is true. */
+    suggestedMode: z.enum(["record", "ask"]).nullable().optional(),
   })
   .passthrough();
 
@@ -217,7 +230,9 @@ Your JSON MUST match this shape (optional keys only when relevant):
   "pendingRecurrenceUpdate": null | { "merchantHint": string | null, "cadenceText": string, "nextReminderAt": string | null },
   "ledgerEdit": null | { "merchantHint": string | null, "dateHint": string | null, "walletHint": string | null, "categoryHint": string | null, "memoHint": string | null, "newAmount": number | null, "newMemo": string | null, "newCategory": string | null, "newMerchant": string | null },
   "analyticsRequest": null | { "range": "30d" | "month" | "all" | "auto", "focus": "overview" | "spending" | "income" | "categories" | "wallets" | "merchants", "needChart": boolean },
-  "requiresComplexReasoning": boolean
+  "requiresComplexReasoning": boolean,
+  "intentMismatch": boolean,
+  "suggestedMode": "record" | "ask" | null
 }
 
 Rules:
@@ -346,7 +361,11 @@ Purchase intent — CRITICAL:
 - Do NOT set both transaction and planSuggestion at the same time.
 - Plans labeled PLANNED, NOT PURCHASED are not transactions. Never describe them as something the user already bought.
 
-assistantMessage should be a concise, human summary of what you understood (1-3 sentences), not raw JSON.`;
+assistantMessage should be a concise, human summary of what you understood (1-3 sentences), not raw JSON.
+
+intentMismatch and suggestedMode:
+- Default intentMismatch to false and suggestedMode to null.
+- The ACTIVE CHAT MODE section at the end of these instructions defines when you MUST set intentMismatch true and ask the user to switch the composer toggle. That section overrides extraction rules when the user's message does not match the selected mode, or when you are unsure which mode the message belongs to.`;
 
 type ResponseLanguage = "English" | "Vietnamese";
 
@@ -554,7 +573,7 @@ function buildAnalyticsAssistantMessage(input: {
   return `${summaryLine}\n\n${detailLine}`.trim();
 }
 
-function buildSystemInstruction(locale: Locale, responseLanguage: ResponseLanguage): string {
+function buildSystemInstruction(locale: Locale, responseLanguage: ResponseLanguage, chatMode: ChatMode): string {
   const localeHint =
     locale === "vi"
       ? [
@@ -572,7 +591,10 @@ Locale and chat language:
 - ${localeHint}
 - For this specific reply, assistantMessage and followUpQuestion MUST be in ${responseLanguage}.
 - The selected app language is the default when the user message language is unclear or there is only an attachment.
-- If the user clearly switches to another language during chat, follow that current message's language for the reply.`;
+- If the user clearly switches to another language during chat, follow that current message's language for the reply.
+- suggestedMode values stay the English enums "record" and "ask". When intentMismatch is true and the reply is in Vietnamese, name the toggle labels Thêm (record) and Hỏi (ask).
+
+${chatModeSystemAddendum(chatMode)}`;
 }
 
 const ConversationTurnSchema = z.object({
@@ -591,11 +613,14 @@ function todayIso(): string {
 
 function buildUserPrompt(input: {
   message: string;
+  chatMode: ChatMode;
   hasAttachments: boolean;
   appLocale: Locale;
   responseLanguage: ResponseLanguage;
   shareContext?: { title?: string; text?: string; url?: string };
   financeContext?: string;
+  /** Saved-ledger readout. Included in Ask mode so answers use real rows. */
+  ledgerSnapshot?: string;
   conversation?: {
     packedFinancialSummary: string | null;
     recentPriorTurns: ConversationTurnForApi[];
@@ -604,6 +629,17 @@ function buildUserPrompt(input: {
   const lines: string[] = [];
 
   lines.push(`TODAY'S DATE: ${todayIso()} — use this as the reference year/month for all dates.`);
+  lines.push("");
+
+  if (input.chatMode === "ask") {
+    lines.push(
+      'ACTIVE CHAT MODE: ask (toggle label "Ask" / "Hỏi"). Read and analyze only. Do not record a transaction. If this message is a new entry to save, or you are unsure, set intentMismatch true, suggestedMode "record", and ask the user to switch the toggle to Add.',
+    );
+  } else {
+    lines.push(
+      'ACTIVE CHAT MODE: record (toggle label "Add" / "Thêm"). Record a new entry only. If this message is a question about saved data, or you are unsure, set intentMismatch true, suggestedMode "ask", and ask the user to switch the toggle to Ask. Do not write a transaction in that case.',
+    );
+  }
   lines.push("");
 
   if (input.conversation) {
@@ -652,6 +688,11 @@ function buildUserPrompt(input: {
     if (input.shareContext.title) lines.push(`title: ${input.shareContext.title}`);
     if (input.shareContext.text) lines.push(`text: ${input.shareContext.text}`);
     if (input.shareContext.url) lines.push(`url: ${input.shareContext.url}`);
+  }
+
+  if (input.ledgerSnapshot) {
+    lines.push("");
+    lines.push(input.ledgerSnapshot);
   }
 
   if (input.financeContext) {
@@ -740,8 +781,10 @@ export async function handleChatInput(formData: FormData) {
   const cookieLocale = parseLocale(localeCookieStore.get(LOCALE_COOKIE)?.value);
 
   const message = String(formData.get("message") ?? "").trim();
+  const chatMode = parseChatMode(String(formData.get("chatMode") ?? "").trim());
   const locale = parseLocale(String(formData.get("locale") ?? cookieLocale));
   const responseLanguage = resolveResponseLanguage(locale, message);
+  const responseLocale: Locale = responseLanguage === "Vietnamese" ? "vi" : "en";
   const shareContextRaw = String(formData.get("shareContext") ?? "").trim();
 
   let shareContext: { title?: string; text?: string; url?: string } | undefined;
@@ -800,7 +843,7 @@ export async function handleChatInput(formData: FormData) {
   }
 
   let ledgerSearchAttempt: Awaited<ReturnType<typeof searchLedger>> = null;
-  if (files.length === 0 && message) {
+  if (chatMode === "ask" && files.length === 0 && message) {
     const userPrefs = await prisma.user.findUnique({
       where: { id: userId },
       select: { preferredCurrency: true },
@@ -936,6 +979,7 @@ export async function handleChatInput(formData: FormData) {
       }
     }
   }
+  const ledgerSnapshot = chatMode === "ask" ? await ledgerSnapshotLines(prisma, userId) : undefined;
 
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!apiKey && !has9RouterConfig()) {
@@ -951,7 +995,7 @@ export async function handleChatInput(formData: FormData) {
   const model = apiKey
     ? new GoogleGenerativeAI(apiKey).getGenerativeModel({
         model: modelName,
-        systemInstruction: buildSystemInstruction(locale, responseLanguage),
+        systemInstruction: buildSystemInstruction(locale, responseLanguage, chatMode),
         generationConfig: {
           temperature: 0.15,
           responseMimeType: "application/json",
@@ -961,11 +1005,13 @@ export async function handleChatInput(formData: FormData) {
 
   const prompt = buildUserPrompt({
     message,
+    chatMode,
     hasAttachments: files.length > 0,
     appLocale: locale,
     responseLanguage,
     shareContext,
     financeContext,
+    ledgerSnapshot,
     conversation:
       packedFinancialSummary || recentPriorTurns.length > 0
         ? { packedFinancialSummary, recentPriorTurns }
@@ -1142,7 +1188,7 @@ export async function handleChatInput(formData: FormData) {
           usage = usageFromGeminiResult(rawText);
         } else {
           const rawText = await call9RouterChatCompletion({
-            systemInstruction: buildSystemInstruction(locale, responseLanguage),
+            systemInstruction: buildSystemInstruction(locale, responseLanguage, chatMode),
             userPrompt: prompt,
             temperature: 0.15,
             attachments: preparedAttachments,
@@ -1162,7 +1208,12 @@ export async function handleChatInput(formData: FormData) {
           if (parsed.data.requiresComplexReasoning && !isLastModel) {
             success = false;
             errorMessage = "Model flagged requiresComplexReasoning, trying larger model.";
-          } else if (preparedAttachments.length > 0 && parsed.data.documentKind === "unknown_document") {
+          } else if (
+            chatMode === "record" &&
+            parsed.data.intentMismatch !== true &&
+            preparedAttachments.length > 0 &&
+            parsed.data.documentKind === "unknown_document"
+          ) {
             success = false;
             errorMessage = "Model returned unknown_document for an attachment, triggering fallback.";
           }
@@ -1225,7 +1276,15 @@ export async function handleChatInput(formData: FormData) {
 
     const data = parsed.data;
     const hadFileUpload = files.length > 0;
+    const explicitMismatch = data.intentMismatch === true;
+    const modelWantsWrite = modelProposedLedgerWrite(data);
+    /** Ask mode never writes. A mismatch (or a write proposed while Asking) never writes. */
+    const blockLedgerWrite = chatMode === "ask" || explicitMismatch;
+    const forcedAskMismatch = chatMode === "ask" && modelWantsWrite && !explicitMismatch;
     const analyticsRequested =
+      chatMode === "ask" &&
+      !explicitMismatch &&
+      !forcedAskMismatch &&
       !hadFileUpload &&
       !looksLikeLedgerLookupRequest(message) &&
       (data.analyticsRequest != null || looksLikeAnalyticsRequest(message));
@@ -1318,6 +1377,8 @@ export async function handleChatInput(formData: FormData) {
         paystub: null,
         extractedTextSummary: null,
         awaitingLedgerDecision: false,
+        intentMismatch: false,
+        suggestedMode: null,
         analytics: {
           ...dashboard,
           focus: analyticsFocus,
@@ -1363,7 +1424,7 @@ export async function handleChatInput(formData: FormData) {
         ? data.followUpQuestion.trim()
         : null;
 
-    if (hadFileUpload) {
+    if (hadFileUpload && !blockLedgerWrite) {
       if (data.documentKind === "unknown_document" && !followUpQuestion) {
         followUpQuestion = languageText(
           responseLanguage,
@@ -1408,23 +1469,43 @@ export async function handleChatInput(formData: FormData) {
       attachmentNames: preparedAttachments.map((attachment) => attachment.originalFilename),
     });
 
-    const structured = {
-      documentKind: data.documentKind,
-      transaction: data.transaction ?? null,
-      transactionList: data.transactionList ?? null,
-      receipt: data.receipt ?? null,
-      paystub: data.paystub ?? null,
-      extractedTextSummary: data.extractedTextSummary ?? null,
-      awaitingLedgerDecision: Boolean(
-        data.awaitingLedgerDecision ??
-          (
-            hadFileUpload &&
-            (data.documentKind === "receipt" ||
-              isPayrollDocumentKind(data.documentKind) ||
-              data.documentKind === "transaction_list_capture")
+    const structured = blockLedgerWrite
+      ? {
+          documentKind: "unknown_document" as const,
+          transaction: null,
+          transactionList: null,
+          receipt: null,
+          paystub: null,
+          extractedTextSummary:
+            chatMode === "ask" && !explicitMismatch && !forcedAskMismatch
+              ? (data.extractedTextSummary ?? null)
+              : null,
+          awaitingLedgerDecision: false,
+          intentMismatch: explicitMismatch || forcedAskMismatch,
+          suggestedMode:
+            explicitMismatch || forcedAskMismatch
+              ? (data.suggestedMode ?? (chatMode === "ask" ? ("record" as const) : ("ask" as const)))
+              : null,
+        }
+      : {
+          documentKind: data.documentKind,
+          transaction: data.transaction ?? null,
+          transactionList: data.transactionList ?? null,
+          receipt: data.receipt ?? null,
+          paystub: data.paystub ?? null,
+          extractedTextSummary: data.extractedTextSummary ?? null,
+          awaitingLedgerDecision: Boolean(
+            data.awaitingLedgerDecision ??
+              (
+                hadFileUpload &&
+                (data.documentKind === "receipt" ||
+                  isPayrollDocumentKind(data.documentKind) ||
+                  data.documentKind === "transaction_list_capture")
+              ),
           ),
-      ),
-    };
+          intentMismatch: false,
+          suggestedMode: null,
+        };
 
     let structuredExcerpt: string | null = null;
     try {
@@ -1444,6 +1525,7 @@ export async function handleChatInput(formData: FormData) {
     let pendingImportJson: string | null = null;
 
     const isFinancialUpload =
+      !blockLedgerWrite &&
       hadFileUpload &&
       chatTurnId &&
       (data.documentKind === "receipt" ||
@@ -1579,6 +1661,39 @@ export async function handleChatInput(formData: FormData) {
             "I processed your upload but didn’t get a readable summary back. Try again, or add a short note about what the file is.",
             "Mình đã xử lý tệp tải lên nhưng chưa nhận được phần tóm tắt dễ đọc. Bạn thử lại hoặc ghi chú ngắn tệp này là gì nhé.",
           );
+
+    if (
+      chatMode === "ask" &&
+      !explicitMismatch &&
+      !forcedAskMismatch &&
+      hadFileUpload &&
+      typeof data.extractedTextSummary === "string" &&
+      data.extractedTextSummary.trim().length > 0 &&
+      !assistantMessage.includes(data.extractedTextSummary.trim())
+    ) {
+      const readoutLabel = languageText(
+        responseLanguage,
+        "From your file (not saved):",
+        "Nội dung đọc từ tệp (không lưu vào sổ):",
+      );
+      assistantMessage = `${assistantMessage}\n\n---\n${readoutLabel}\n${data.extractedTextSummary.trim()}`;
+    }
+
+    if (forcedAskMismatch) {
+      assistantMessage = mismatchAssistantMessage("ask", responseLocale);
+      followUpQuestion = mismatchFollowUp("ask", responseLocale);
+    } else if (explicitMismatch) {
+      if (!followUpQuestion) {
+        followUpQuestion = mismatchFollowUp(chatMode, responseLocale);
+      }
+      const mentionsSwitch =
+        /switch|toggle|chuyển|nút/i.test(assistantMessage) || /switch|toggle|chuyển|nút/i.test(followUpQuestion);
+      if (!mentionsSwitch) {
+        assistantMessage = mismatchAssistantMessage(chatMode, responseLocale);
+        followUpQuestion = mismatchFollowUp(chatMode, responseLocale);
+      }
+    }
+
     if (pendingDocumentImport) {
       const scanInstruction =
         pendingDocumentImport.transactionItems && pendingDocumentImport.transactionItems.length > 0
@@ -1596,6 +1711,7 @@ export async function handleChatInput(formData: FormData) {
       assistantMessage = `${assistantMessage}\n\n---\n${readoutLabel}\n${pendingDocumentImport.extractedTextSummary}\n\n---\n${scanInstruction}`;
     }
     if (
+      !blockLedgerWrite &&
       data.documentKind === "freeform_transaction" &&
       data.transaction &&
       typeof data.transaction === "object" &&
@@ -1635,6 +1751,7 @@ export async function handleChatInput(formData: FormData) {
     }
 
     if (
+      !blockLedgerWrite &&
       !hadFileUpload &&
       isPayrollDocumentKind(data.documentKind) &&
       data.paystub &&
@@ -1662,6 +1779,7 @@ export async function handleChatInput(formData: FormData) {
     }
 
     if (
+      !blockLedgerWrite &&
       data.documentKind === "ledger_edit" &&
       data.ledgerEdit &&
       typeof data.ledgerEdit === "object"
@@ -1722,6 +1840,7 @@ export async function handleChatInput(formData: FormData) {
     let planCreated = false;
     let createdPlan: { planId: string; title: string; amountCents: number | null; currency: string } | null = null;
     if (
+      !blockLedgerWrite &&
       data.planSuggestion &&
       typeof data.planSuggestion === "object" &&
       data.planSuggestion.title?.trim()
@@ -1761,6 +1880,7 @@ export async function handleChatInput(formData: FormData) {
 
     let pendingRecurrenceApplied: null | { label: string; cadenceText: string } = null;
     if (
+      !blockLedgerWrite &&
       data.pendingRecurrenceUpdate &&
       typeof data.pendingRecurrenceUpdate.cadenceText === "string" &&
       data.pendingRecurrenceUpdate.cadenceText.trim()

@@ -4,8 +4,10 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   Camera,
   Loader2,
+  MessageCircleQuestion,
   Mic,
   Paperclip,
+  Plus,
   RotateCcw,
   SendHorizontal,
   Square,
@@ -54,6 +56,7 @@ import { useLocale } from "@/contexts/locale-context";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
+import type { ChatMode } from "@/lib/chat/chat-mode";
 import type { ChatAttachmentMeta, ChatMessage, PendingDocumentImport, PendingLedgerEdit } from "@/types/chat";
 import {
   computePackTailStart,
@@ -92,9 +95,9 @@ function buildReplyFeedbackContext(messages: ChatMessage[], assistantIndex: numb
 
 function welcomeText(locale: Locale): string {
   if (locale === "vi") {
-    return "Chào bạn — mình là NekoZeni, chú mèo thần tài giữ sổ chi tiêu của bạn. Hãy nói bạn vừa mua gì, hoặc tải lên hóa đơn, bill, hay phiếu lương từ Canada hoặc Việt Nam. Mình sẽ đọc thông tin chính và hỏi thêm nếu thiếu chi tiết quan trọng.";
+    return "Chào bạn — mình là NekoZeni, chú mèo thần tài giữ sổ chi tiêu của bạn. Chế độ Thêm dùng để ghi khoản mua, hóa đơn, bill hoặc phiếu lương mới từ Canada hoặc Việt Nam. Chế độ Hỏi dùng để xem dữ liệu đã lưu — tổng, danh mục, kế hoạch — và không ghi vào sổ. Nếu tin nhắn không khớp chế độ, mình sẽ nhờ bạn chuyển nút.";
   }
-  return "Hi — I’m NekoZeni, your little lucky-cat treasurer. Tell me what you bought, or upload a receipt, bill, or payroll slip from Canada or Vietnam. I’ll extract the key fields and ask a quick follow-up if anything important is missing.";
+  return "Hi — I’m NekoZeni, your little lucky-cat treasurer. Add records a new purchase, receipt, bill, or payroll slip from Canada or Vietnam. Ask looks at what you’ve already saved — totals, categories, and plans — and does not write to your ledger. If a message doesn’t match the toggle, I’ll ask you to switch it.";
 }
 
 function defaultWelcomeMessages(locale: Locale): ChatMessage[] {
@@ -108,6 +111,7 @@ function defaultWelcomeMessages(locale: Locale): ChatMessage[] {
 }
 
 const CHAT_DAY_STORAGE_KEY = "nekozen:chatDayCtx:v1";
+const CHAT_MODE_STORAGE_KEY = "nekozen:chatMode:v1";
 
 type ChatDayStoredV1 = {
   v: 1;
@@ -178,6 +182,8 @@ export function ChatInterface() {
 
   const [messages, setMessages] = useState<ChatMessage[]>(() => defaultWelcomeMessages(locale));
   const messagesRef = useRef(messages);
+  const [chatMode, setChatMode] = useState<ChatMode>("record");
+  const chatModeRef = useRef<ChatMode>("record");
 
   const [draft, setDraft] = useState("");
   const [files, setFiles] = useState<File[]>([]);
@@ -214,6 +220,28 @@ export function ChatInterface() {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(CHAT_MODE_STORAGE_KEY);
+      if (stored === "ask" || stored === "record") {
+        chatModeRef.current = stored;
+        setChatMode(stored);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const selectChatMode = useCallback((next: ChatMode) => {
+    chatModeRef.current = next;
+    setChatMode(next);
+    try {
+      localStorage.setItem(CHAT_MODE_STORAGE_KEY, next);
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   useEffect(() => {
     packedSummaryRef.current = packedFinancialSummary;
@@ -453,10 +481,11 @@ export function ChatInterface() {
 
   const handleDailySpendLog = useCallback(() => {
     const prefix = `${t("daily_spend_draft_prefix")} `;
+    selectChatMode("record");
     setDraft((prev) => (prev.trim() ? prev : prefix));
     acknowledgeSpendCheckin();
     requestAnimationFrame(() => textareaRef.current?.focus());
-  }, [acknowledgeSpendCheckin, t]);
+  }, [acknowledgeSpendCheckin, selectChatMode, t]);
 
   const executeChatSend = useCallback(
     async (args: {
@@ -465,8 +494,10 @@ export function ChatInterface() {
       outgoingFiles: File[];
       outgoingShare: { title?: string; text?: string; url?: string } | undefined;
       attachmentMeta: ChatAttachmentMeta[];
+      chatMode: ChatMode;
     }): Promise<ChatSendResult> => {
-      const { trimmed, snapshotMessages, outgoingFiles, outgoingShare, attachmentMeta } = args;
+      const { trimmed, snapshotMessages, outgoingFiles, outgoingShare, attachmentMeta, chatMode: modeAtSend } =
+        args;
       if (!trimmed && outgoingFiles.length === 0) {
         return { ok: false, error: "Add a message or attach a file.", restoreComposer: false };
       }
@@ -481,6 +512,7 @@ export function ChatInterface() {
           role: "user",
           content: trimmed || "(attachment only)",
           attachments: attachmentMeta.length ? attachmentMeta : undefined,
+          mode: modeAtSend,
         };
         const fullIncludingUser = [...hist, userMessage];
 
@@ -517,6 +549,7 @@ export function ChatInterface() {
         const formData = new FormData();
         formData.set("message", trimmed);
         formData.set("locale", locale);
+        formData.set("chatMode", modeAtSend);
         if (summary.length > 0) {
           formData.set("conversationPackedSummary", summary);
         }
@@ -651,6 +684,7 @@ export function ChatInterface() {
         outgoingFiles: [],
         outgoingShare: undefined,
         attachmentMeta: [],
+        chatMode: chatModeRef.current,
       });
       if (r.ok) return { ok: true as const, speakText: r.speakText };
       return { ok: false as const, error: r.error };
@@ -692,6 +726,7 @@ export function ChatInterface() {
           outgoingFiles,
           outgoingShare,
           attachmentMeta: att,
+          chatMode,
         });
         if (!r.ok && r.restoreComposer) {
           setDraft(trimmed);
@@ -820,7 +855,7 @@ export function ChatInterface() {
         onChanged={refreshPendingCount}
       />
 
-      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-3 pb-[calc(8rem+env(safe-area-inset-bottom))] pt-4">
+      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-3 pb-[calc(11rem+env(safe-area-inset-bottom))] pt-4">
         <ScrollArea className="min-h-[calc(100dvh-7.5rem)] pr-1">
           <div className="space-y-3 pb-4">
             <AnimatePresence initial={false}>
@@ -867,6 +902,11 @@ export function ChatInterface() {
                             : "rounded-bl-md bg-card text-card-foreground",
                         )}
                       >
+                        {m.role === "user" && m.mode ? (
+                          <div className="mb-1 text-[10px] font-semibold tracking-wide text-primary-foreground/80">
+                            {m.mode === "ask" ? t("chat_mode_ask") : t("chat_mode_record")}
+                          </div>
+                        ) : null}
                         <div className="whitespace-pre-wrap break-words">{m.content}</div>
 
                         {m.attachments && m.attachments.length > 0 ? (
@@ -1123,6 +1163,50 @@ export function ChatInterface() {
               }}
             />
 
+            <div className="mb-1.5 flex items-center gap-2">
+              <div
+                role="group"
+                aria-label={t("chat_mode_group_aria")}
+                className="grid shrink-0 grid-cols-2 gap-0.5 rounded-xl bg-muted p-0.5"
+              >
+                <button
+                  type="button"
+                  aria-pressed={chatMode === "record"}
+                  title={t("chat_mode_record_title")}
+                  disabled={isPending || chatBusy}
+                  onClick={() => selectChatMode("record")}
+                  className={cn(
+                    "inline-flex h-8 items-center justify-center gap-1 rounded-lg px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
+                    chatMode === "record"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  {t("chat_mode_record")}
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={chatMode === "ask"}
+                  title={t("chat_mode_ask_title")}
+                  disabled={isPending || chatBusy}
+                  onClick={() => selectChatMode("ask")}
+                  className={cn(
+                    "inline-flex h-8 items-center justify-center gap-1 rounded-lg px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
+                    chatMode === "ask"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <MessageCircleQuestion className="h-3.5 w-3.5" />
+                  {t("chat_mode_ask")}
+                </button>
+              </div>
+              <p className="min-w-0 text-[11px] leading-snug text-muted-foreground">
+                {chatMode === "ask" ? t("chat_mode_ask_hint") : t("chat_mode_record_hint")}
+              </p>
+            </div>
+
             {/* ── Google-style pill input ── */}
             <div className="flex flex-col rounded-2xl border bg-muted/40 shadow-sm ring-1 ring-transparent transition-all focus-within:bg-background focus-within:ring-primary/40">
               {/* Text input row */}
@@ -1145,7 +1229,7 @@ export function ChatInterface() {
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
                   onPaste={onPasteComposer}
-                  placeholder="Message NekoZeni…"
+                  placeholder={chatMode === "ask" ? t("chat_placeholder_ask") : t("chat_placeholder_record")}
                   className="min-h-[36px] flex-1 resize-none border-0 bg-transparent px-0 py-1 text-sm shadow-none outline-none focus-visible:ring-0"
                   rows={1}
                   onKeyDown={(e) => {

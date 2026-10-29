@@ -20,12 +20,13 @@ const en: GuideContent = {
     {
       heading: "Basics after you sign in",
       paragraphs: [
-        "The main screen is the chat. Type what you bought (store, amount, date) or use the paperclip to attach a photo or PDF.",
-        "Send the message. The assistant reads your text and files, then replies with a short summary. If it saved a transaction to your ledger, it says so in the reply.",
+        "The main screen is the chat. Above the message box, Add records a new purchase and Ask answers questions about what is already saved. Type what you bought (store, amount, date) or use the paperclip to attach a photo or PDF while Add is selected.",
+        "Send the message. The assistant reads your text and files, then replies with a short summary. If it saved a transaction to your ledger, it says so in the reply. In Ask, nothing is written to the ledger.",
         "Open Tools (top right) for wallets, categories, CSV import, backups, and to confirm repeating bills that need a quick yes/no.",
       ],
       bullets: [
         "Under Tools → Profile you can set your name, chat nickname, profile photo, and password. Tools → Plans is for spending budgets and savings goals the assistant can see in context.",
+        "Add vs Ask: Add saves a new transaction, receipt, or paystub. Ask reads your saved ledger (recent rows, totals, and plans) and does not save. If a message doesn’t match the selected mode, or NekoZeni isn’t sure, it asks you to switch the toggle instead of guessing.",
         "Images and PDFs you send are stored for your account (and included in a full ZIP backup under Tools → Backup).",
         "Large photos are automatically compressed to a clear JPEG when needed so uploads stay fast and storage-friendly.",
         "To remove a transaction, open Tools → Dashboard, open a total or bar, then open the line. Delete on the transaction details moves it to Tools → Deleted, where you can restore it later.",
@@ -74,12 +75,13 @@ const vi: GuideContent = {
     {
       heading: "Cơ bản sau khi đăng nhập",
       paragraphs: [
-        "Màn hình chính là khung chat. Gõ mô tả mua hàng (cửa hàng, số tiền, ngày) hoặc bấm biểu tượng ghim để đính ảnh hoặc PDF.",
-        "Gửi tin. Trợ lý đọc chữ và file, rồi trả lời ngắn. Nếu đã lưu giao dịch vào sổ, tin nhắn sẽ nói rõ.",
+        "Màn hình chính là khung chat. Phía trên ô nhắn, Thêm ghi giao dịch mới và Hỏi trả lời về dữ liệu đã lưu. Khi đang ở Thêm, gõ mô tả mua hàng (cửa hàng, số tiền, ngày) hoặc bấm biểu tượng ghim để đính ảnh hoặc PDF.",
+        "Gửi tin. Trợ lý đọc chữ và file, rồi trả lời ngắn. Nếu đã lưu giao dịch vào sổ, tin nhắn sẽ nói rõ. Ở chế độ Hỏi, không có gì được ghi vào sổ.",
         "Mở Công cụ (góc trên bên phải) để quản lý ví, danh mục, nhập CSV, sao lưu, và xác nhận các khoản lặp lại cần bạn đồng ý nhanh.",
       ],
       bullets: [
         "Tại Công cụ → Hồ sơ bạn đặt tên, biệt danh chat, ảnh đại diện và mật khẩu. Công cụ → Kế hoạch dùng cho ngân sách chi và mục tiêu tiết kiệm mà trợ lý thấy trong ngữ cảnh.",
+        "Thêm và Hỏi: Thêm lưu giao dịch, hóa đơn hoặc phiếu lương mới. Hỏi đọc sổ đã lưu (giao dịch gần đây, tổng, kế hoạch) và không lưu. Nếu tin nhắn không khớp chế độ, hoặc NekoZeni không chắc, trợ lý sẽ nhờ bạn chuyển nút thay vì đoán.",
         "Ảnh và PDF bạn gửi được lưu theo tài khoản (và nằm trong bản sao lưu ZIP đầy đủ tại Công cụ → Sao lưu).",
         "Ảnh lớn được nén tự động sang JPEG rõ nét khi cần để tải nhanh và tiết kiệm dung lượng.",
         "Để xóa một giao dịch: Công cụ → Dashboard, mở một tổng hoặc cột, rồi mở dòng đó. Nút Delete trong chi tiết giao dịch chuyển dòng sang Công cụ → Deleted, và bạn có thể khôi phục sau.",

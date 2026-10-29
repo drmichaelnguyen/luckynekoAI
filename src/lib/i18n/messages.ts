@@ -55,6 +55,15 @@ export type MessageKey =
   | "guide_link_aria"
   | "chat_account_title"
   | "chat_account_aria"
+  | "chat_mode_group_aria"
+  | "chat_mode_record"
+  | "chat_mode_ask"
+  | "chat_mode_record_hint"
+  | "chat_mode_ask_hint"
+  | "chat_mode_record_title"
+  | "chat_mode_ask_title"
+  | "chat_placeholder_record"
+  | "chat_placeholder_ask"
   | "daily_spend_checkin_body"
   | "daily_spend_checkin_hint"
   | "daily_spend_checkin_log"
@@ -153,6 +162,15 @@ const en: Record<MessageKey, string> = {
   guide_link_aria: "Open the guide: using NekoZeni, install as an app, and share from the camera",
   chat_account_title: "Account & profile",
   chat_account_aria: "Open account and profile: name, nickname, photo, password",
+  chat_mode_group_aria: "Chat mode",
+  chat_mode_record: "Add",
+  chat_mode_ask: "Ask",
+  chat_mode_record_hint: "Saves a new purchase, income, or receipt. Questions about what you already saved belong in Ask.",
+  chat_mode_ask_hint: "Reads your ledger and answers. Nothing is saved. New purchases belong in Add.",
+  chat_mode_record_title: "Add a new transaction",
+  chat_mode_ask_title: "Ask about saved data",
+  chat_placeholder_record: "What did you buy or get paid?",
+  chat_placeholder_ask: "Ask about spending, totals, or plans…",
   daily_spend_checkin_body: "It's 10 PM or later — anything you'd like to log from today?",
   daily_spend_checkin_hint: "A quick note or receipt helps NekoZeni keep your ledger up to date.",
   daily_spend_checkin_log: "Log spending",
@@ -251,6 +269,15 @@ const vi: Record<MessageKey, string> = {
   guide_link_aria: "Mở hướng dẫn: dùng NekoZeni, cài như app, chia sẻ từ máy ảnh",
   chat_account_title: "Tài khoản & hồ sơ",
   chat_account_aria: "Mở tài khoản và hồ sơ: tên, biệt danh, ảnh, mật khẩu",
+  chat_mode_group_aria: "Chế độ chat",
+  chat_mode_record: "Thêm",
+  chat_mode_ask: "Hỏi",
+  chat_mode_record_hint: "Lưu khoản mua, thu nhập hoặc hóa đơn mới. Hỏi về dữ liệu đã lưu thì chuyển sang Hỏi.",
+  chat_mode_ask_hint: "Đọc sổ và trả lời. Không lưu gì. Muốn ghi giao dịch mới thì chuyển sang Thêm.",
+  chat_mode_record_title: "Thêm giao dịch mới",
+  chat_mode_ask_title: "Hỏi về dữ liệu đã lưu",
+  chat_placeholder_record: "Bạn đã mua hoặc nhận gì?",
+  chat_placeholder_ask: "Hỏi về chi tiêu, tổng, hoặc kế hoạch…",
   daily_spend_checkin_body: "Đã qua 22h — bạn có muốn ghi lại chi tiêu hôm nay không?",
   daily_spend_checkin_hint: "Một dòng ghi chú hoặc ảnh hóa đơn giúp NekoZeni cập nhật sổ chi.",
   daily_spend_checkin_log: "Ghi chi tiêu",
