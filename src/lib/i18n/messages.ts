@@ -37,6 +37,16 @@ export type MessageKey =
   | "guide_link_aria"
   | "chat_account_title"
   | "chat_account_aria"
+  | "chat_welcome"
+  | "chat_mode_group_aria"
+  | "chat_mode_record"
+  | "chat_mode_ask"
+  | "chat_mode_record_hint"
+  | "chat_mode_ask_hint"
+  | "chat_mode_record_title"
+  | "chat_mode_ask_title"
+  | "chat_placeholder_record"
+  | "chat_placeholder_ask"
   | "daily_spend_checkin_body"
   | "daily_spend_checkin_hint"
   | "daily_spend_checkin_log"
@@ -92,6 +102,17 @@ const en: Record<MessageKey, string> = {
   guide_link_aria: "Open the guide: using NekoZeni, install as an app, and share from the camera",
   chat_account_title: "Account & profile",
   chat_account_aria: "Open account settings: language, profile, name, photo, password",
+  chat_welcome:
+    "Hi — I’m NekoZeni, your little lucky-cat treasurer. Add records a new purchase, receipt, or paystub. Ask looks at what you’ve already saved — totals, categories, and plans — and does not write to your ledger. If a message doesn’t match the toggle, I’ll ask you to switch it.",
+  chat_mode_group_aria: "Chat mode",
+  chat_mode_record: "Add",
+  chat_mode_ask: "Ask",
+  chat_mode_record_hint: "Saves a new purchase, income, or receipt. Questions about what you already saved belong in Ask.",
+  chat_mode_ask_hint: "Reads your ledger and answers. Nothing is saved. New purchases belong in Add.",
+  chat_mode_record_title: "Add a new transaction",
+  chat_mode_ask_title: "Ask about saved data",
+  chat_placeholder_record: "What did you buy or get paid?",
+  chat_placeholder_ask: "Ask about spending, totals, or plans…",
   daily_spend_checkin_body: "It's 10 PM or later — anything you'd like to log from today?",
   daily_spend_checkin_hint: "A quick note or receipt helps NekoZeni keep your ledger up to date.",
   daily_spend_checkin_log: "Log spending",
@@ -147,6 +168,17 @@ const vi: Record<MessageKey, string> = {
   guide_link_aria: "Mở hướng dẫn: dùng NekoZeni, cài như app, chia sẻ từ máy ảnh",
   chat_account_title: "Tài khoản & hồ sơ",
   chat_account_aria: "Mở cài đặt tài khoản: ngôn ngữ, hồ sơ, tên, ảnh, mật khẩu",
+  chat_welcome:
+    "Chào bạn — mình là NekoZeni, thủ quỹ mèo may mắn. Thêm dùng để ghi khoản mua, hóa đơn hoặc phiếu lương mới. Hỏi dùng để xem dữ liệu đã lưu — tổng, danh mục, kế hoạch — và không ghi vào sổ. Nếu tin nhắn không khớp chế độ, mình sẽ nhờ bạn chuyển nút.",
+  chat_mode_group_aria: "Chế độ chat",
+  chat_mode_record: "Thêm",
+  chat_mode_ask: "Hỏi",
+  chat_mode_record_hint: "Lưu khoản mua, thu nhập hoặc hóa đơn mới. Hỏi về dữ liệu đã lưu thì chuyển sang Hỏi.",
+  chat_mode_ask_hint: "Đọc sổ và trả lời. Không lưu gì. Muốn ghi giao dịch mới thì chuyển sang Thêm.",
+  chat_mode_record_title: "Thêm giao dịch mới",
+  chat_mode_ask_title: "Hỏi về dữ liệu đã lưu",
+  chat_placeholder_record: "Bạn đã mua hoặc nhận gì?",
+  chat_placeholder_ask: "Hỏi về chi tiêu, tổng, hoặc kế hoạch…",
   daily_spend_checkin_body: "Đã qua 22h — bạn có muốn ghi lại chi tiêu hôm nay không?",
   daily_spend_checkin_hint: "Một dòng ghi chú hoặc ảnh hóa đơn giúp NekoZeni cập nhật sổ chi.",
   daily_spend_checkin_log: "Ghi chi tiêu",

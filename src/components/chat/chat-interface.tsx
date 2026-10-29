@@ -6,8 +6,10 @@ import {
   ImagePlus,
   Loader2,
   LogOut,
+  MessageCircleQuestion,
   Mic,
   Paperclip,
+  Plus,
   SendHorizontal,
   Square,
   User,
@@ -37,6 +39,7 @@ import { useLocale } from "@/contexts/locale-context";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
+import type { ChatMode } from "@/lib/chat/chat-mode";
 import type { ChatAttachmentMeta, ChatMessage, PendingDocumentImport } from "@/types/chat";
 import {
   computePackTailStart,
@@ -53,18 +56,25 @@ function randomId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function defaultWelcomeMessages(): ChatMessage[] {
+function welcomeThread(content: string): ChatMessage[] {
   return [
     {
       id: "welcome",
       role: "assistant",
-      content:
-        "Hi — I’m NekoZeni, your little lucky-cat treasurer. Tell me what you bought, or upload a receipt or Canadian paystub. I’ll extract structured fields and ask a quick follow-up if anything important is missing.",
+      content,
     },
   ];
 }
 
+function ledgerExtractionJson(structured: unknown): string | undefined {
+  if (!structured || typeof structured !== "object") return undefined;
+  const row = structured as { transaction?: unknown; receipt?: unknown; paystub?: unknown };
+  if (!row.transaction && !row.receipt && !row.paystub) return undefined;
+  return JSON.stringify(structured, null, 2);
+}
+
 const CHAT_DAY_STORAGE_KEY = "nekozen:chatDayCtx:v1";
+const CHAT_MODE_STORAGE_KEY = "nekozen:chatMode:v1";
 
 type ChatDayStoredV1 = {
   v: 1;
@@ -94,13 +104,18 @@ type ChatSendResult =
 
 export function ChatInterface() {
   const { t, locale } = useLocale();
+  const welcomeText = t("chat_welcome");
+  const welcomeRef = useRef(welcomeText);
+  welcomeRef.current = welcomeText;
   const router = useRouter();
   const searchParams = useSearchParams();
   const importId = searchParams.get("importId");
   const { data: session, status } = useSession();
 
-  const [messages, setMessages] = useState<ChatMessage[]>(() => defaultWelcomeMessages());
+  const [messages, setMessages] = useState<ChatMessage[]>(() => welcomeThread(welcomeText));
   const messagesRef = useRef(messages);
+  const [chatMode, setChatMode] = useState<ChatMode>("record");
+  const chatModeRef = useRef<ChatMode>("record");
 
   const [draft, setDraft] = useState("");
   const [files, setFiles] = useState<File[]>([]);
@@ -133,6 +148,37 @@ export function ChatInterface() {
   }, [messages]);
 
   useEffect(() => {
+    setMessages((prev) => {
+      if (prev.length === 1 && prev[0]?.id === "welcome" && prev[0].content !== welcomeText) {
+        return welcomeThread(welcomeText);
+      }
+      return prev;
+    });
+  }, [welcomeText]);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(CHAT_MODE_STORAGE_KEY);
+      if (stored === "ask" || stored === "record") {
+        chatModeRef.current = stored;
+        setChatMode(stored);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const selectChatMode = useCallback((next: ChatMode) => {
+    chatModeRef.current = next;
+    setChatMode(next);
+    try {
+      localStorage.setItem(CHAT_MODE_STORAGE_KEY, next);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
     packedSummaryRef.current = packedFinancialSummary;
     packedThroughRef.current = packedThroughIndex;
   }, [packedFinancialSummary, packedThroughIndex]);
@@ -146,7 +192,7 @@ export function ChatInterface() {
     }
     const uid = session.user.id;
     if (lastSessionUserIdRef.current && lastSessionUserIdRef.current !== uid) {
-      setMessages(defaultWelcomeMessages());
+      setMessages(welcomeThread(welcomeRef.current));
       setPackedFinancialSummary("");
       setPackedThroughIndex(0);
       chatHydratedKeyRef.current = "";
@@ -176,7 +222,7 @@ export function ChatInterface() {
         } catch {
           /* ignore */
         }
-        setMessages(defaultWelcomeMessages());
+        setMessages(welcomeThread(welcomeRef.current));
         setPackedFinancialSummary("");
         setPackedThroughIndex(0);
         chatHydratedKeyRef.current = key;
@@ -310,10 +356,11 @@ export function ChatInterface() {
 
   const handleDailySpendLog = useCallback(() => {
     const prefix = `${t("daily_spend_draft_prefix")} `;
+    selectChatMode("record");
     setDraft((prev) => (prev.trim() ? prev : prefix));
     acknowledgeSpendCheckin();
     requestAnimationFrame(() => textareaRef.current?.focus());
-  }, [acknowledgeSpendCheckin, t]);
+  }, [acknowledgeSpendCheckin, selectChatMode, t]);
 
   const executeChatSend = useCallback(
     async (args: {
@@ -322,8 +369,10 @@ export function ChatInterface() {
       outgoingFiles: File[];
       outgoingShare: { title?: string; text?: string; url?: string } | undefined;
       attachmentMeta: ChatAttachmentMeta[];
+      chatMode: ChatMode;
     }): Promise<ChatSendResult> => {
-      const { trimmed, snapshotMessages, outgoingFiles, outgoingShare, attachmentMeta } = args;
+      const { trimmed, snapshotMessages, outgoingFiles, outgoingShare, attachmentMeta, chatMode: modeAtSend } =
+        args;
       if (!trimmed && outgoingFiles.length === 0) {
         return { ok: false, error: "Add a message or attach a file.", restoreComposer: false };
       }
@@ -336,6 +385,7 @@ export function ChatInterface() {
           role: "user",
           content: trimmed || "(attachment only)",
           attachments: attachmentMeta.length ? attachmentMeta : undefined,
+          mode: modeAtSend,
         };
         const fullIncludingUser = [...hist, userMessage];
 
@@ -372,6 +422,7 @@ export function ChatInterface() {
 
         const formData = new FormData();
         formData.set("locale", locale);
+        formData.set("chatMode", modeAtSend);
         formData.set("message", trimmed);
         if (summary.length > 0) {
           formData.set("conversationPackedSummary", summary);
@@ -403,7 +454,7 @@ export function ChatInterface() {
           return { ok: false, error: result.error, restoreComposer: false };
         }
 
-        const structuredJson = JSON.stringify(result.structured, null, 2);
+        const structuredJson = ledgerExtractionJson(result.structured);
         const parts = [result.assistantMessage];
         if (result.followUpQuestion) {
           parts.push("");
@@ -464,6 +515,7 @@ export function ChatInterface() {
         outgoingFiles: [],
         outgoingShare: undefined,
         attachmentMeta: [],
+        chatMode: chatModeRef.current,
       });
       if (r.ok) return { ok: true as const, speakText: r.speakText };
       return { ok: false as const, error: r.error };
@@ -502,6 +554,7 @@ export function ChatInterface() {
           outgoingFiles,
           outgoingShare,
           attachmentMeta: att,
+          chatMode,
         });
         if (!r.ok && r.restoreComposer) {
           setDraft(trimmed);
@@ -613,7 +666,7 @@ export function ChatInterface() {
         onBooksChanged={refreshPendingCount}
       />
 
-      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-3 pb-[calc(6.5rem+env(safe-area-inset-bottom))] pt-3 sm:px-4 sm:pb-[calc(5.75rem+env(safe-area-inset-bottom))] sm:pt-4">
+      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-3 pb-[calc(12.5rem+env(safe-area-inset-bottom))] pt-3 sm:px-4 sm:pb-[calc(10.25rem+env(safe-area-inset-bottom))] sm:pt-4">
         <ScrollArea className="min-h-[calc(100dvh-7.25rem)] pr-1 sm:min-h-[calc(100dvh-8.25rem)] sm:pr-2">
           <div className="space-y-3 pb-4">
             <AnimatePresence initial={false}>
@@ -660,6 +713,11 @@ export function ChatInterface() {
                             : "rounded-bl-md bg-card text-card-foreground",
                         )}
                       >
+                        {m.role === "user" && m.mode ? (
+                          <div className="mb-1 text-[10px] font-semibold tracking-wide text-primary-foreground/80">
+                            {m.mode === "ask" ? t("chat_mode_ask") : t("chat_mode_record")}
+                          </div>
+                        ) : null}
                         <div className="whitespace-pre-wrap">{m.content}</div>
 
                         {m.attachments && m.attachments.length > 0 ? (
@@ -756,6 +814,48 @@ export function ChatInterface() {
             </div>
           ) : null}
 
+          <div
+            role="group"
+            aria-label={t("chat_mode_group_aria")}
+            className="mb-2 grid grid-cols-2 gap-1 rounded-xl bg-muted p-1"
+          >
+            <button
+              type="button"
+              aria-pressed={chatMode === "record"}
+              title={t("chat_mode_record_title")}
+              disabled={isPending || chatBusy}
+              onClick={() => selectChatMode("record")}
+              className={cn(
+                "inline-flex h-10 min-h-[40px] items-center justify-center gap-1.5 rounded-lg px-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
+                chatMode === "record"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Plus className="h-4 w-4" />
+              {t("chat_mode_record")}
+            </button>
+            <button
+              type="button"
+              aria-pressed={chatMode === "ask"}
+              title={t("chat_mode_ask_title")}
+              disabled={isPending || chatBusy}
+              onClick={() => selectChatMode("ask")}
+              className={cn(
+                "inline-flex h-10 min-h-[40px] items-center justify-center gap-1.5 rounded-lg px-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
+                chatMode === "ask"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <MessageCircleQuestion className="h-4 w-4" />
+              {t("chat_mode_ask")}
+            </button>
+          </div>
+          <p className="mb-2 text-[11px] leading-snug text-muted-foreground">
+            {chatMode === "ask" ? t("chat_mode_ask_hint") : t("chat_mode_record_hint")}
+          </p>
+
           <div className="flex flex-wrap items-end gap-2">
             <input
               ref={fileInputRef}
@@ -773,7 +873,7 @@ export function ChatInterface() {
               ref={textareaRef}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
-              placeholder="Message NekoZeni…"
+              placeholder={chatMode === "ask" ? t("chat_placeholder_ask") : t("chat_placeholder_record")}
               className="min-h-[52px] max-h-[min(40vh,16rem)] w-full shrink-0 basis-full resize-y sm:max-h-none sm:min-h-[44px] sm:w-auto sm:flex-1 sm:basis-auto"
               rows={2}
               onKeyDown={(e) => {

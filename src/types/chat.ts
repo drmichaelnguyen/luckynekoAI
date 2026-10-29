@@ -11,6 +11,8 @@ export type ChatMessage = {
   content: string;
   attachments?: ChatAttachmentMeta[];
   structuredJson?: string;
+  /** Composer mode used when the user sent this turn. */
+  mode?: "record" | "ask";
 };
 
 export type PendingDocumentImport = {

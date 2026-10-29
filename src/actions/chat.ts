@@ -7,6 +7,15 @@ import { z } from "zod";
 
 import { PENDING_IMPORT_VERSION } from "@/lib/document-import/pending-import-shared";
 import { auth } from "@/auth";
+import {
+  chatModeSystemAddendum,
+  mismatchAssistantMessage,
+  mismatchFollowUp,
+  modelProposedLedgerWrite,
+  parseChatMode,
+  type ChatMode,
+} from "@/lib/chat/chat-mode";
+import { ledgerSnapshotLines } from "@/lib/finance/ledger-snapshot";
 import { persistFreeformLedgerEntry } from "@/lib/finance/persist-from-chat";
 import { financeContextLines } from "@/lib/finance/seed";
 import { maybeCompressImageForStorage } from "@/lib/media/compress-image-for-storage";
@@ -45,6 +54,10 @@ const GeminiResponseSchema = z
     extractedTextSummary: z.union([z.string(), z.null()]).optional(),
     /** When true with a financial document upload, the app waits for explicit user ADD/EDIT before writing the ledger. */
     awaitingLedgerDecision: z.boolean().optional(),
+    /** True when the message does not match the composer mode, or the model is unsure. */
+    intentMismatch: z.boolean().optional(),
+    /** Mode the user should switch to when intentMismatch is true. */
+    suggestedMode: z.enum(["record", "ask"]).nullable().optional(),
   })
   .passthrough();
 
@@ -86,7 +99,9 @@ Your JSON MUST match this shape (optional keys only when relevant):
   "assistantMessage": string,
   "followUpQuestion": string | null,
   "extractedTextSummary": string | null,
-  "awaitingLedgerDecision": boolean
+  "awaitingLedgerDecision": boolean,
+  "intentMismatch": boolean,
+  "suggestedMode": "record" | "ask" | null
 }
 
 Rules:
@@ -158,7 +173,11 @@ Follow-ups:
 Conversation memory:
 - The user message may include a CONVERSATION SUMMARY (financial facts only) plus RECENT CHAT TURNS from earlier today. Use them for continuity (amounts discussed, categories chosen, corrections). If USER LEDGER CONTEXT disagrees with chat memory, trust the ledger as the saved source of truth.
 
-assistantMessage should be a concise, human summary of what you understood (1-3 sentences), not raw JSON.`;
+assistantMessage should be a concise, human summary of what you understood (1-3 sentences), not raw JSON.
+
+intentMismatch and suggestedMode:
+- Default intentMismatch to false and suggestedMode to null.
+- The ACTIVE CHAT MODE section at the end of these instructions defines when you MUST set intentMismatch true and ask the user to switch the composer toggle. That section overrides extraction rules when the user's message does not match the selected mode, or when you are unsure which mode the message belongs to.`;
 
 const VI_CHAT_LOCALE_PREAMBLE = `CRITICAL — The user's app UI is set to VIETNAMESE (Tiếng Việt).
 You MUST write these JSON fields entirely in natural Vietnamese: assistantMessage, followUpQuestion, extractedTextSummary.
@@ -170,11 +189,12 @@ category and walletLabel strings must match USER LEDGER CONTEXT exactly (often E
 
 `;
 
-function chatSystemInstructionForLocale(locale: Locale): string {
-  if (locale !== "vi") return SYSTEM_INSTRUCTION;
-  return `${VI_CHAT_LOCALE_PREAMBLE}${SYSTEM_INSTRUCTION}
+function chatSystemInstructionForLocale(locale: Locale, mode: ChatMode): string {
+  const modeBlock = `\n\n${chatModeSystemAddendum(mode)}`;
+  if (locale !== "vi") return `${SYSTEM_INSTRUCTION}${modeBlock}`;
+  return `${VI_CHAT_LOCALE_PREAMBLE}${SYSTEM_INSTRUCTION}${modeBlock}
 
-REMINDER (Vietnamese UI): assistantMessage, followUpQuestion, extractedTextSummary → Vietnamese only, every turn.`;
+REMINDER (Vietnamese UI): assistantMessage, followUpQuestion, extractedTextSummary → Vietnamese only, every turn. suggestedMode values stay the English enums "record" and "ask". When intentMismatch is true, the switch-mode question must be Vietnamese and must name the toggle labels Thêm (record) and Hỏi (ask).`;
 }
 
 const ConversationTurnSchema = z.object({
@@ -185,8 +205,11 @@ const ConversationTurnSchema = z.object({
 
 function buildUserPrompt(input: {
   message: string;
+  chatMode: ChatMode;
   shareContext?: { title?: string; text?: string; url?: string };
   financeContext?: string;
+  /** Saved-ledger readout. Included in Ask mode so answers use real rows. */
+  ledgerSnapshot?: string;
   /** When vi, reinforce Vietnamese for model-visible user strings. */
   responseLocale?: Locale;
   conversation?: {
@@ -195,6 +218,17 @@ function buildUserPrompt(input: {
   };
 }): string {
   const lines: string[] = [];
+
+  if (input.chatMode === "ask") {
+    lines.push(
+      'ACTIVE CHAT MODE: ask (toggle label "Ask" / "Hỏi"). Read and analyze only. Do not record a transaction. If this message is a new entry to save, or you are unsure, set intentMismatch true, suggestedMode "record", and ask the user to switch the toggle to Add.',
+    );
+  } else {
+    lines.push(
+      'ACTIVE CHAT MODE: record (toggle label "Add" / "Thêm"). Record a new entry only. If this message is a question about saved data, or you are unsure, set intentMismatch true, suggestedMode "ask", and ask the user to switch the toggle to Ask. Do not write a transaction in that case.',
+    );
+  }
+  lines.push("");
 
   if (input.conversation) {
     const pack = (input.conversation.packedFinancialSummary ?? "").trim();
@@ -234,6 +268,11 @@ function buildUserPrompt(input: {
     if (input.shareContext.url) lines.push(`url: ${input.shareContext.url}`);
   }
 
+  if (input.ledgerSnapshot) {
+    lines.push("");
+    lines.push(input.ledgerSnapshot);
+  }
+
   if (input.financeContext) {
     lines.push("");
     lines.push(input.financeContext);
@@ -264,6 +303,7 @@ export async function handleChatInput(formData: FormData) {
   );
 
   const message = String(formData.get("message") ?? "").trim();
+  const chatMode = parseChatMode(String(formData.get("chatMode") ?? "").trim());
   const shareContextRaw = String(formData.get("shareContext") ?? "").trim();
 
   let shareContext: { title?: string; text?: string; url?: string } | undefined;
@@ -321,6 +361,8 @@ export async function handleChatInput(formData: FormData) {
   }
 
   const financeContext = await financeContextLines(prisma, session.user.id);
+  const ledgerSnapshot =
+    chatMode === "ask" ? await ledgerSnapshotLines(prisma, session.user.id) : undefined;
 
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!apiKey) {
@@ -336,7 +378,7 @@ export async function handleChatInput(formData: FormData) {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
     model: modelName,
-    systemInstruction: chatSystemInstructionForLocale(uiLocale),
+    systemInstruction: chatSystemInstructionForLocale(uiLocale, chatMode),
     generationConfig: {
       temperature: 0.15,
       responseMimeType: "application/json",
@@ -345,8 +387,10 @@ export async function handleChatInput(formData: FormData) {
 
   const prompt = buildUserPrompt({
     message,
+    chatMode,
     shareContext,
     financeContext,
+    ledgerSnapshot,
     responseLocale: uiLocale,
     conversation:
       packedFinancialSummary || recentPriorTurns.length > 0
@@ -460,12 +504,18 @@ export async function handleChatInput(formData: FormData) {
 
     const data = parsed.data;
     const hadFileUpload = files.length > 0;
+    const explicitMismatch = data.intentMismatch === true;
+    const modelWantsWrite = modelProposedLedgerWrite(data);
+    /** Ask mode never writes. A mismatch (or a write proposed while Asking) never writes. */
+    const blockLedgerWrite = chatMode === "ask" || explicitMismatch;
+    const forcedAskMismatch = chatMode === "ask" && modelWantsWrite && !explicitMismatch;
+
     let followUpQuestion =
       typeof data.followUpQuestion === "string" && data.followUpQuestion.trim().length > 0
         ? data.followUpQuestion.trim()
         : null;
 
-    if (hadFileUpload) {
+    if (hadFileUpload && !blockLedgerWrite) {
       if (data.documentKind === "unknown_document" && !followUpQuestion) {
         followUpQuestion =
           "I’m not sure what this file is. Is it a purchase receipt? Upload a clearer photo or type what you bought and how much.";
@@ -490,18 +540,37 @@ export async function handleChatInput(formData: FormData) {
       }
     }
 
-    const structured = {
-      documentKind: data.documentKind,
-      transaction: data.transaction ?? null,
-      receipt: data.receipt ?? null,
-      paystub: data.paystub ?? null,
-      extractedTextSummary: data.extractedTextSummary ?? null,
-      awaitingLedgerDecision: Boolean(
-        data.awaitingLedgerDecision ??
-          (hadFileUpload &&
-            (data.documentKind === "receipt" || data.documentKind === "canadian_paystub")),
-      ),
-    };
+    const structured = blockLedgerWrite
+      ? {
+          documentKind: "unknown_document" as const,
+          transaction: null,
+          receipt: null,
+          paystub: null,
+          extractedTextSummary:
+            chatMode === "ask" && !explicitMismatch && !forcedAskMismatch
+              ? (data.extractedTextSummary ?? null)
+              : null,
+          awaitingLedgerDecision: false,
+          intentMismatch: explicitMismatch || forcedAskMismatch,
+          suggestedMode:
+            explicitMismatch || forcedAskMismatch
+              ? (data.suggestedMode ?? (chatMode === "ask" ? ("record" as const) : ("ask" as const)))
+              : null,
+        }
+      : {
+          documentKind: data.documentKind,
+          transaction: data.transaction ?? null,
+          receipt: data.receipt ?? null,
+          paystub: data.paystub ?? null,
+          extractedTextSummary: data.extractedTextSummary ?? null,
+          awaitingLedgerDecision: Boolean(
+            data.awaitingLedgerDecision ??
+              (hadFileUpload &&
+                (data.documentKind === "receipt" || data.documentKind === "canadian_paystub")),
+          ),
+          intentMismatch: false,
+          suggestedMode: null,
+        };
 
     let structuredExcerpt: string | null = null;
     try {
@@ -519,6 +588,7 @@ export async function handleChatInput(formData: FormData) {
     let pendingImportJson: string | null = null;
 
     const isFinancialUpload =
+      !blockLedgerWrite &&
       hadFileUpload &&
       chatTurnId &&
       (data.documentKind === "receipt" || data.documentKind === "canadian_paystub");
@@ -571,6 +641,39 @@ export async function handleChatInput(formData: FormData) {
       typeof data.assistantMessage === "string" && data.assistantMessage.trim().length > 0
         ? data.assistantMessage.trim()
         : "I processed your upload but didn’t get a readable summary back. Try again, or add a short note about what the file is.";
+
+    if (
+      chatMode === "ask" &&
+      !explicitMismatch &&
+      !forcedAskMismatch &&
+      hadFileUpload &&
+      typeof data.extractedTextSummary === "string" &&
+      data.extractedTextSummary.trim().length > 0 &&
+      !assistantMessage.includes(data.extractedTextSummary.trim())
+    ) {
+      const readout = data.extractedTextSummary.trim();
+      const readoutTail =
+        uiLocale === "vi"
+          ? `\n\n---\nNội dung đọc từ tệp (không lưu vào sổ):\n${readout}`
+          : `\n\n---\nFrom your file (not saved):\n${readout}`;
+      assistantMessage = `${assistantMessage}${readoutTail}`;
+    }
+
+    if (forcedAskMismatch) {
+      assistantMessage = mismatchAssistantMessage("ask", uiLocale);
+      followUpQuestion = mismatchFollowUp("ask", uiLocale);
+    } else if (explicitMismatch) {
+      if (!followUpQuestion) {
+        followUpQuestion = mismatchFollowUp(chatMode, uiLocale);
+      }
+      const mentionsSwitch =
+        /switch|toggle|chuyển|nút/i.test(assistantMessage) || /switch|toggle|chuyển|nút/i.test(followUpQuestion);
+      if (!mentionsSwitch) {
+        assistantMessage = mismatchAssistantMessage(chatMode, uiLocale);
+        followUpQuestion = mismatchFollowUp(chatMode, uiLocale);
+      }
+    }
+
     if (pendingDocumentImport) {
       const pendingTail =
         uiLocale === "vi"
@@ -579,6 +682,7 @@ export async function handleChatInput(formData: FormData) {
       assistantMessage = `${assistantMessage}${pendingTail}`;
     }
     if (
+      !blockLedgerWrite &&
       data.documentKind === "freeform_transaction" &&
       data.transaction &&
       typeof data.transaction === "object" &&
