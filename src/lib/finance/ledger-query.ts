@@ -214,7 +214,10 @@ export function extractSearchTerms(message: string): string[] {
     "deposits",
     "inflow",
     "inflows",
+    "receive",
     "received",
+    "money",
+    "from",
     "salary",
     "paycheck",
     "paychecks",
@@ -351,7 +354,7 @@ function removeScopeTerms(searchTerms: string[], scopes: Array<string | null>): 
 function parseDirection(message: string): "out" | "in" {
   const normalized = normalizeQueryText(message);
   if (
-    /\b(income|earned|earnings|revenue|deposit|inflow|received|salary|paycheck|payroll|wages|paid me|got paid|get paid|thu nhap|tien vao|doanh thu|nhan duoc|luong)\b/.test(
+    /\b(income|earned|earnings|revenue|deposit|inflow|receive|received|salary|paycheck|payroll|wages|paid me|got paid|get paid|thu nhap|tien vao|doanh thu|nhan duoc|luong)\b/.test(
       normalized,
     )
   ) {
@@ -935,6 +938,32 @@ export async function executeLedgerQuery(
 ): Promise<LedgerQueryResult> {
   const where = buildLedgerQueryWhere(input.userId, input.displayCurrency, input.query);
   const sampleLimit = input.sampleLimit ?? 8;
+  const textTerms = sqlSearchTerms(input.query);
+
+  // SQLite LIKE is accent-sensitive ("thao" never matches "Thảo"), so text terms are
+  // matched in memory against the diacritic-stripped haystack instead of in SQL.
+  if (textTerms.length > 0) {
+    const { AND: _textAnd, OR: _textOr, ...baseWhere } = where;
+    const candidates = await db.transaction.findMany({
+      where: baseWhere,
+      orderBy: [{ occurredAt: "desc" }],
+      take: 5000,
+      include: { wallet: true, category: { include: { parent: true } } },
+    });
+    const transactions = candidates.filter((tx) => {
+      const haystack = transactionSearchHaystack(tx.merchant, tx.memo, categoryDisplayName(tx.category), tx.wallet.name);
+      return input.query.textMatchMode === "any"
+        ? textTerms.some((term) => haystack.includes(term))
+        : textTerms.every((term) => haystack.includes(term));
+    });
+    const ranked = rankTransactionsForQuery(transactions, input.query);
+    return summarizeLedgerQuery(ranked, input.query, {
+      displayCurrency: input.displayCurrency,
+      sampleLimit,
+      txCount: ranked.length,
+      totalsByCurrency: totalsFromRows(ranked, input.displayCurrency),
+    });
+  }
 
   const [transactions, totalsByCurrencyRows, txCount] = await Promise.all([
     db.transaction.findMany({
@@ -952,9 +981,7 @@ export async function executeLedgerQuery(
   ]);
 
   const ranked = rankTransactionsForQuery(transactions, input.query);
-  const usesRankedFilter =
-    input.query.searchPhrases.length > 0 ||
-    (input.query.textMatchMode === "any" && input.query.searchTerms.length > 0);
+  const usesRankedFilter = input.query.searchPhrases.length > 0;
   const effectiveCount = usesRankedFilter ? ranked.length : txCount;
   const totalsByCurrency = usesRankedFilter
     ? totalsFromRows(ranked, input.displayCurrency)
@@ -965,25 +992,41 @@ export async function executeLedgerQuery(
         })),
         input.displayCurrency,
       );
-  const effectiveTotalCents = primaryTotalCents(totalsByCurrency, input.displayCurrency);
+  return summarizeLedgerQuery(ranked, input.query, {
+    displayCurrency: input.displayCurrency,
+    sampleLimit,
+    txCount: effectiveCount,
+    totalsByCurrency,
+  });
+}
 
+function summarizeLedgerQuery(
+  ranked: RankedLedgerTransaction[],
+  query: ParsedLedgerQuery,
+  input: {
+    displayCurrency: string;
+    sampleLimit: number;
+    txCount: number;
+    totalsByCurrency: LedgerCurrencyTotal[];
+  },
+): LedgerQueryResult {
   const scopeParts: string[] = [];
-  if (input.query.walletLabel) scopeParts.push(input.query.walletLabel);
-  if (input.query.categoryLabel) scopeParts.push(input.query.categoryLabel);
-  if (input.query.searchPhrases.length > 0) {
-    scopeParts.push(input.query.searchPhrases.join(" · "));
-  } else if (input.query.searchTerms.length > 0) {
-    scopeParts.push(input.query.searchTerms.join(" "));
+  if (query.walletLabel) scopeParts.push(query.walletLabel);
+  if (query.categoryLabel) scopeParts.push(query.categoryLabel);
+  if (query.searchPhrases.length > 0) {
+    scopeParts.push(query.searchPhrases.join(" · "));
+  } else if (query.searchTerms.length > 0) {
+    scopeParts.push(query.searchTerms.join(" "));
   }
-  if (input.query.timeRange) scopeParts.push(input.query.timeRange.label);
+  if (query.timeRange) scopeParts.push(query.timeRange.label);
   const scopeLabel = scopeParts.length > 0 ? scopeParts.join(" · ") : "matching transactions";
 
-  const sampleLines = ranked.slice(0, sampleLimit).map((tx) => formatTransactionLine(tx));
+  const sampleLines = ranked.slice(0, input.sampleLimit).map((tx) => formatTransactionLine(tx));
 
   const searchTransactions: LedgerSearchRow[] = ranked.slice(0, 50).map((tx) => ({
     id: tx.id!,
     occurredAt: tx.occurredAt.toISOString(),
-    direction: tx.direction ?? input.query.direction,
+    direction: tx.direction ?? query.direction,
     amountCents: tx.amountCents,
     currency: tx.currency,
     merchant: tx.merchant,
@@ -994,9 +1037,9 @@ export async function executeLedgerQuery(
   }));
 
   return {
-    totalCents: effectiveTotalCents,
-    totalsByCurrency,
-    txCount: effectiveCount,
+    totalCents: primaryTotalCents(input.totalsByCurrency, input.displayCurrency),
+    totalsByCurrency: input.totalsByCurrency,
+    txCount: input.txCount,
     sampleLines,
     scopeLabel,
     transactions: searchTransactions,

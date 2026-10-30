@@ -13,6 +13,7 @@ import {
   synthesizeLedgerAnswer,
 } from "@/lib/ai/data-answer";
 import { call9RouterChatCompletion, has9RouterConfig } from "@/lib/ai/9router";
+import { translateLedgerQuestionToEnglish } from "@/lib/ai/ledger-query-translate";
 import {
   chooseChatPrimary,
   chooseChatRouterModels,
@@ -843,15 +844,24 @@ export async function handleChatInput(formData: FormData) {
   }
 
   let ledgerSearchAttempt: Awaited<ReturnType<typeof searchLedger>> = null;
+  let ledgerSearchMessage = message;
   if (chatMode === "ask" && files.length === 0 && message) {
     const userPrefs = await prisma.user.findUnique({
       where: { id: userId },
       select: { preferredCurrency: true },
     });
     const displayCurrency = (userPrefs?.preferredCurrency ?? "CAD").toUpperCase().slice(0, 3);
+    const translatedQuestion = await translateLedgerQuestionToEnglish({
+      message,
+      userId,
+      geminiModel: adminSettings.routing.geminiModel,
+      nineRouterUrl: adminSettings.routing.nineRouterUrl,
+      nineRouterModel: adminSettings.routing.nineRouterMiniModel,
+    });
+    if (translatedQuestion) ledgerSearchMessage = translatedQuestion;
     ledgerSearchAttempt = await searchLedger(prisma, {
       userId,
-      message,
+      message: ledgerSearchMessage,
       displayCurrency,
       responseLanguage,
     });
@@ -954,7 +964,7 @@ export async function handleChatInput(formData: FormData) {
   }
 
   let financeContext = await financeContextLines(prisma, userId, {
-    forLookup: Boolean(message && looksLikeLedgerLookupRequest(message)),
+    forLookup: Boolean(ledgerSearchMessage && looksLikeLedgerLookupRequest(ledgerSearchMessage)),
   });
   if (files.length === 0 && message) {
     const userPrefs = await prisma.user.findUnique({
@@ -969,7 +979,7 @@ export async function handleChatInput(formData: FormData) {
         result: ledgerSearchAttempt.result,
         displayCurrency,
       })}`;
-    } else if (looksLikeLedgerLookupRequest(message)) {
+    } else if (looksLikeLedgerLookupRequest(ledgerSearchMessage)) {
       const recentBlock = await recentTransactionsContextBlock(prisma, {
         userId,
         displayCurrency,
