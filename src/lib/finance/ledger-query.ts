@@ -36,6 +36,12 @@ export type ParsedLedgerQuery = {
   /** Multi-word phrases from the user message (e.g. "oil change", "ram 1500"). */
   searchPhrases: string[];
   searchTerms: string[];
+  /**
+   * Original topic words from the question before synonym expansion.
+   * Used for scope labels so "photography" stays readable while searchTerms
+   * may include photo, camera, nikon, etc.
+   */
+  topicTerms: string[];
   direction: "out" | "in";
   questionKind: LedgerQuestionKind;
   /** "all" = every search term must match (spend totals); "any" = at least one term (when/find). */
@@ -307,6 +313,170 @@ export function extractSearchTerms(message: string): string[] {
     .split(" ")
     .filter((token) => token.length >= 2 && !stopwords.has(token) && !/^20\d{2}$/.test(token))
     .filter((token, index, arr) => arr.indexOf(token) === index);
+}
+
+/**
+ * Domain topic → related ledger keywords (merchants, memos, brands).
+ * Triggers match extracted search terms; keywords are OR-searched.
+ */
+const TOPIC_KEYWORD_GROUPS: Array<{ triggers: string[]; keywords: string[] }> = [
+  {
+    triggers: ["photography", "photograph", "photographer", "photoshoot", "photos", "photo"],
+    keywords: [
+      "photography",
+      "photograph",
+      "photographer",
+      "photoshoot",
+      "photo",
+      "photos",
+      "camera",
+      "cameras",
+      "dslr",
+      "mirrorless",
+      "nikon",
+      "canon",
+      "fujifilm",
+      "fuji",
+      "leica",
+      "shutterfly",
+      "lightroom",
+      "photoshop",
+      "printique",
+      "mpix",
+      "darkroom",
+      "portrait",
+      "headshot",
+      "wedding photo",
+      "photo lab",
+      "camera lens",
+    ],
+  },
+  {
+    triggers: ["coffee", "cafe", "café", "starbucks"],
+    keywords: ["coffee", "cafe", "café", "starbucks", "tim hortons", "espresso", "latte", "cappuccino"],
+  },
+  {
+    triggers: ["gas", "fuel", "petrol", "gasoline"],
+    keywords: ["gas", "fuel", "petrol", "gasoline", "esso", "shell", "petro", "chevron", "husky", "pioneer"],
+  },
+  {
+    triggers: ["groceries", "grocery", "supermarket"],
+    keywords: [
+      "groceries",
+      "grocery",
+      "supermarket",
+      "costco",
+      "walmart",
+      "loblaws",
+      "nofrills",
+      "safeway",
+      "sobeys",
+      "freshco",
+      "superstore",
+    ],
+  },
+  {
+    triggers: ["dining", "restaurant", "restaurants", "takeout", "takeaway"],
+    keywords: ["dining", "restaurant", "restaurants", "takeout", "takeaway", "uber eats", "doordash", "skip"],
+  },
+];
+
+/** Light English morphology so "photography" also yields "photo". */
+export function morphologicalVariants(term: string): string[] {
+  const normalized = normalizeQueryText(term);
+  if (!normalized || normalized.length < 3) return normalized ? [normalized] : [];
+  const out = new Set<string>([normalized]);
+
+  if (normalized.endsWith("ography") && normalized.length > 8) {
+    // photography → photo
+    out.add(normalized.slice(0, -6));
+  }
+  if (normalized.endsWith("ographies") && normalized.length > 10) {
+    out.add(normalized.slice(0, -9));
+  }
+  if (normalized.endsWith("ing") && normalized.length > 5) {
+    out.add(normalized.slice(0, -3));
+  }
+  if (normalized.endsWith("ies") && normalized.length > 4) {
+    out.add(`${normalized.slice(0, -3)}y`);
+  }
+  if (normalized.endsWith("es") && normalized.length > 4) {
+    out.add(normalized.slice(0, -2));
+  } else if (normalized.endsWith("s") && normalized.length > 3 && !normalized.endsWith("ss")) {
+    out.add(normalized.slice(0, -1));
+  }
+
+  return [...out].filter((token) => token.length >= 2);
+}
+
+/**
+ * Expand topic words into related ledger search keywords.
+ * When expansion runs, callers should OR-match (`textMatchMode: "any"`).
+ */
+export function expandSearchTerms(terms: string[]): {
+  terms: string[];
+  topicTerms: string[];
+  usedExpansion: boolean;
+} {
+  const topicTerms = terms
+    .map((term) => normalizeQueryText(term))
+    .filter((term) => term.length >= 2)
+    .filter((term, index, arr) => arr.indexOf(term) === index);
+
+  if (topicTerms.length === 0) {
+    return { terms: [], topicTerms: [], usedExpansion: false };
+  }
+
+  const expanded = new Set<string>();
+  let usedExpansion = false;
+
+  for (const term of topicTerms) {
+    for (const variant of morphologicalVariants(term)) {
+      if (!topicTerms.includes(variant)) usedExpansion = true;
+      expanded.add(variant);
+    }
+  }
+
+  for (const group of TOPIC_KEYWORD_GROUPS) {
+    const hit = group.triggers.some((trigger) => {
+      const t = normalizeQueryText(trigger);
+      return topicTerms.some(
+        (term) => term === t || term.startsWith(t) || t.startsWith(term) || morphologicalVariants(term).includes(t),
+      );
+    });
+    if (!hit) continue;
+    usedExpansion = true;
+    for (const keyword of group.keywords) {
+      const normalized = normalizeQueryText(keyword);
+      if (normalized) expanded.add(normalized);
+    }
+  }
+
+  const termsOut = [...expanded];
+  return {
+    terms: termsOut,
+    topicTerms,
+    usedExpansion: usedExpansion && termsOut.some((term) => !topicTerms.includes(term)),
+  };
+}
+
+/** Merge LLM- or caller-supplied keywords into a parsed query (always OR-match). */
+export function withAdditionalSearchTerms(query: ParsedLedgerQuery, extraTerms: string[]): ParsedLedgerQuery {
+  const merged = new Set(query.searchTerms);
+  for (const raw of extraTerms) {
+    const normalized = normalizeQueryText(raw);
+    if (normalized.length >= 2) merged.add(normalized);
+  }
+  const topicTerms =
+    query.topicTerms.length > 0
+      ? query.topicTerms
+      : query.searchTerms.filter((term) => term.length >= 2).slice(0, 6);
+  return {
+    ...query,
+    topicTerms,
+    searchTerms: [...merged],
+    textMatchMode: "any",
+  };
 }
 
 function selectWalletScope(wallets: LedgerWalletRow[], message: string): { walletIds: string[]; walletLabel: string | null } {
@@ -620,14 +790,20 @@ export function parseLedgerQuery(
   }
 
   const filteredSearchTerms = stripTimeTokens(searchTerms, effectiveTimeRange);
+  const expansion = expandSearchTerms(filteredSearchTerms);
   const temporalIntent = looksLikeTemporalLookupRequest(message);
   const questionKind: LedgerQuestionKind = temporalIntent
     ? "temporal"
     : amountIntent
       ? "amount"
       : "browse";
-  const textMatchMode: "all" | "any" =
-    questionKind === "amount" && !browseIntent ? "all" : "any";
+  // Synonym expansion ORs related keywords (photo|camera|nikon for "photography").
+  // Without expansion, amount questions still require every extracted term.
+  const textMatchMode: "all" | "any" = expansion.usedExpansion
+    ? "any"
+    : questionKind === "amount" && !browseIntent
+      ? "all"
+      : "any";
 
   return {
     timeRange: effectiveTimeRange,
@@ -636,7 +812,8 @@ export function parseLedgerQuery(
     walletIds,
     walletLabel,
     searchPhrases,
-    searchTerms: filteredSearchTerms,
+    searchTerms: expansion.terms,
+    topicTerms: expansion.topicTerms,
     direction,
     questionKind,
     textMatchMode,
@@ -711,11 +888,26 @@ function scoreTransactionRelevance(
   for (const term of query.searchTerms) {
     if (!haystack.includes(term)) continue;
     matchedTerms += 1;
-    score += term.length >= 5 ? 18 : 12;
+    const isTopicTerm = query.topicTerms.includes(term);
+    score += isTopicTerm ? (term.length >= 5 ? 28 : 20) : term.length >= 5 ? 18 : 12;
   }
 
   if (matchedTerms === query.searchTerms.length && query.searchTerms.length > 0) {
     score += 15;
+  }
+
+  // Prefer rows that hit the user's original wording (or a close stem), not only a synonym.
+  for (const topic of query.topicTerms) {
+    if (haystack.includes(topic)) {
+      score += 35;
+      continue;
+    }
+    for (const variant of morphologicalVariants(topic)) {
+      if (variant !== topic && haystack.includes(variant)) {
+        score += 25;
+        break;
+      }
+    }
   }
 
   const asksRam1500 =
@@ -793,11 +985,15 @@ function rankTransactionsForQuery(
     };
   });
 
+  const expandedAnyMatch =
+    query.textMatchMode === "any" &&
+    query.topicTerms.length > 0 &&
+    query.searchTerms.length > query.topicTerms.length;
   const minScore =
     query.searchPhrases.length > 0
       ? 35
       : query.textMatchMode === "any" && query.searchTerms.length > 0
-        ? query.searchTerms.length === 1
+        ? expandedAnyMatch || query.searchTerms.length === 1
           ? 10
           : 15
         : 0;
@@ -1015,8 +1211,10 @@ function summarizeLedgerQuery(
   if (query.categoryLabel) scopeParts.push(query.categoryLabel);
   if (query.searchPhrases.length > 0) {
     scopeParts.push(query.searchPhrases.join(" · "));
+  } else if (query.topicTerms.length > 0) {
+    scopeParts.push(query.topicTerms.join(" "));
   } else if (query.searchTerms.length > 0) {
-    scopeParts.push(query.searchTerms.join(" "));
+    scopeParts.push(query.searchTerms.slice(0, 6).join(" "));
   }
   if (query.timeRange) scopeParts.push(query.timeRange.label);
   const scopeLabel = scopeParts.length > 0 ? scopeParts.join(" · ") : "matching transactions";
@@ -1055,6 +1253,18 @@ export function formatLedgerQueryResponse(
   const scope = result.scopeLabel;
 
   if (result.txCount === 0) {
+    const related =
+      query.searchTerms.length > 0 &&
+      query.topicTerms.length > 0 &&
+      query.searchTerms.some((term) => !query.topicTerms.includes(term))
+        ? query.searchTerms.filter((term) => !query.topicTerms.includes(term)).slice(0, 8)
+        : [];
+    const relatedHint =
+      related.length > 0
+        ? responseLanguage === "Vietnamese"
+          ? ` Mình cũng đã thử các từ liên quan: ${related.join(", ")}.`
+          : ` I also tried related keywords: ${related.join(", ")}.`
+        : "";
     const hint =
       query.direction === "in"
         ? responseLanguage === "Vietnamese"
@@ -1062,10 +1272,10 @@ export function formatLedgerQueryResponse(
           : " If you logged this already, try the employer name or a wider date range."
         : responseLanguage === "Vietnamese"
           ? " Nếu bạn đã ghi khoản này, hãy thử thêm ghi chú có tên địa điểm hoặc xe (ví dụ “Ram 1500 oil change”)."
-          : " If you logged this already, try adding a memo with the shop or vehicle (e.g. “Ram 1500 oil change”).";
+          : " If you logged this already, try a merchant name, a memo keyword, or a wider date range.";
     return responseLanguage === "Vietnamese"
-      ? `Mình không tìm thấy giao dịch nào phù hợp với ${scope} trong sổ của bạn.${hint}`
-      : `I couldn't find any transactions matching ${scope} in your ledger.${hint}`;
+      ? `Mình không tìm thấy giao dịch nào phù hợp với ${scope} trong sổ của bạn.${relatedHint}${hint}`
+      : `I couldn't find any transactions matching ${scope} in your ledger.${relatedHint}${hint}`;
   }
 
   if (query.questionKind === "temporal" && result.sampleLines.length > 0) {

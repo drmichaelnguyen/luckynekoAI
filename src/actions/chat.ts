@@ -13,7 +13,10 @@ import {
   synthesizeLedgerAnswer,
 } from "@/lib/ai/data-answer";
 import { call9RouterChatCompletion, has9RouterConfig } from "@/lib/ai/9router";
-import { translateLedgerQuestionToEnglish } from "@/lib/ai/ledger-query-translate";
+import {
+  proposeLedgerSearchKeywords,
+  translateLedgerQuestionToEnglish,
+} from "@/lib/ai/ledger-query-translate";
 import {
   chooseChatPrimary,
   chooseChatRouterModels,
@@ -37,9 +40,12 @@ import { persistPaystubLedgerEntry } from "@/lib/finance/persist-receipt-paystub
 import { enrichReceiptWithLineItemCategories } from "@/lib/finance/line-item-category";
 import { resolveAnalyticsCategoryScope as resolveAnalyticsCategoryScopeFromRows } from "@/lib/finance/analytics-query";
 import {
+  executeLedgerQuery,
+  formatLedgerQueryResponse,
   looksLikeLedgerLookupRequest,
   recentTransactionsContextBlock,
   searchLedger,
+  withAdditionalSearchTerms,
 } from "@/lib/finance/ledger-query";
 import { applyPlanSuggestion } from "@/lib/finance/plan-suggestion";
 import { financeContextLines } from "@/lib/finance/seed";
@@ -865,6 +871,56 @@ export async function handleChatInput(formData: FormData) {
       displayCurrency,
       responseLanguage,
     });
+    // Literal topic miss (e.g. "photography" with no exact memo) → ask the model for
+    // related merchant/memo keywords and search again before falling through to chat.
+    if (
+      ledgerSearchAttempt != null &&
+      ledgerSearchAttempt.result.txCount === 0 &&
+      (ledgerSearchAttempt.query.topicTerms.length > 0 ||
+        ledgerSearchAttempt.query.searchTerms.length > 0 ||
+        ledgerSearchAttempt.query.searchPhrases.length > 0)
+    ) {
+      const seedTerms = [
+        ...ledgerSearchAttempt.query.topicTerms,
+        ...ledgerSearchAttempt.query.searchTerms,
+        ...ledgerSearchAttempt.query.searchPhrases,
+      ];
+      const proposed = await proposeLedgerSearchKeywords({
+        message: ledgerSearchMessage,
+        seedTerms,
+        userId,
+        geminiModel: adminSettings.routing.geminiModel,
+        nineRouterUrl: adminSettings.routing.nineRouterUrl,
+        nineRouterModel: adminSettings.routing.nineRouterMiniModel,
+      });
+      if (proposed && proposed.length > 0) {
+        const widened = withAdditionalSearchTerms(ledgerSearchAttempt.query, proposed);
+        const widenedResult = await executeLedgerQuery(prisma, {
+          userId,
+          displayCurrency,
+          query: widened,
+        });
+        if (widenedResult.txCount > 0) {
+          let formattedText = formatLedgerQueryResponse(
+            widened,
+            widenedResult,
+            displayCurrency,
+            responseLanguage,
+          );
+          if (ledgerSearchAttempt.plans.length > 0) {
+            formattedText = `${formattedText}\n\nPLANNED, NOT PURCHASED:\n${ledgerSearchAttempt.plans
+              .map((plan) => `- ${plan.title}`)
+              .join("\n")}`;
+          }
+          ledgerSearchAttempt = {
+            query: widened,
+            result: widenedResult,
+            formattedText,
+            plans: ledgerSearchAttempt.plans,
+          };
+        }
+      }
+    }
     const ledgerNotFound =
       ledgerSearchAttempt != null &&
       ledgerSearchAttempt.result.txCount === 0 &&
