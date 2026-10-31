@@ -2,6 +2,10 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { formatMoneyFromCents } from "@/lib/finance/amount-cents";
 import { resolveAnalyticsCategoryScope } from "@/lib/finance/analytics-query";
+import {
+  expandTopicSearchTerms,
+  mergeSearchKeywords,
+} from "@/lib/finance/topic-search-expansions";
 
 export type LedgerCategoryRow = {
   id: string;
@@ -36,6 +40,14 @@ export type ParsedLedgerQuery = {
   /** Multi-word phrases from the user message (e.g. "oil change", "ram 1500"). */
   searchPhrases: string[];
   searchTerms: string[];
+  /**
+   * Original topic tokens before synonym expansion (for scope labels).
+   * Example: user said "photography" → topicTerms ["photography"] while searchTerms
+   * also include camera, nikon, adobe, etc.
+   */
+  topicTerms: string[];
+  /** True when searchTerms include topic synonyms beyond the user's words. */
+  topicExpanded: boolean;
   direction: "out" | "in";
   questionKind: LedgerQuestionKind;
   /** "all" = every search term must match (spend totals); "any" = at least one term (when/find). */
@@ -620,14 +632,17 @@ export function parseLedgerQuery(
   }
 
   const filteredSearchTerms = stripTimeTokens(searchTerms, effectiveTimeRange);
+  const topicExpansion = expandTopicSearchTerms(filteredSearchTerms);
   const temporalIntent = looksLikeTemporalLookupRequest(message);
   const questionKind: LedgerQuestionKind = temporalIntent
     ? "temporal"
     : amountIntent
       ? "amount"
       : "browse";
+  // Topic synonym expansion must OR-match (photography → nikon OR adobe OR lens).
+  // Requiring every synonym would empty the result set.
   const textMatchMode: "all" | "any" =
-    questionKind === "amount" && !browseIntent ? "all" : "any";
+    topicExpansion.expanded || !(questionKind === "amount" && !browseIntent) ? "any" : "all";
 
   return {
     timeRange: effectiveTimeRange,
@@ -636,10 +651,34 @@ export function parseLedgerQuery(
     walletIds,
     walletLabel,
     searchPhrases,
-    searchTerms: filteredSearchTerms,
+    searchTerms: topicExpansion.terms,
+    topicTerms: topicExpansion.expanded ? topicExpansion.topicTerms : [],
+    topicExpanded: topicExpansion.expanded,
     direction,
     questionKind,
     textMatchMode,
+  };
+}
+
+/** Apply extra merchant/memo keywords (e.g. from LLM expansion) and force OR matching. */
+export function withExpandedSearchTerms(
+  query: ParsedLedgerQuery,
+  extraKeywords: string[],
+): ParsedLedgerQuery {
+  const merged = mergeSearchKeywords(query.searchTerms, extraKeywords);
+  if (merged.length === query.searchTerms.length && extraKeywords.length === 0) {
+    return query;
+  }
+  const topicTerms =
+    query.topicTerms.length > 0
+      ? query.topicTerms
+      : query.searchTerms.slice(0, 3);
+  return {
+    ...query,
+    searchTerms: merged,
+    topicTerms,
+    topicExpanded: true,
+    textMatchMode: "any",
   };
 }
 
@@ -796,11 +835,13 @@ function rankTransactionsForQuery(
   const minScore =
     query.searchPhrases.length > 0
       ? 35
-      : query.textMatchMode === "any" && query.searchTerms.length > 0
-        ? query.searchTerms.length === 1
-          ? 10
-          : 15
-        : 0;
+      : query.topicExpanded
+        ? 10
+        : query.textMatchMode === "any" && query.searchTerms.length > 0
+          ? query.searchTerms.length === 1
+            ? 10
+            : 15
+          : 0;
 
   const filtered =
     minScore > 0
@@ -1015,6 +1056,9 @@ function summarizeLedgerQuery(
   if (query.categoryLabel) scopeParts.push(query.categoryLabel);
   if (query.searchPhrases.length > 0) {
     scopeParts.push(query.searchPhrases.join(" · "));
+  } else if (query.topicTerms.length > 0) {
+    // Prefer the user's original topic ("photography") over the full synonym list.
+    scopeParts.push(query.topicTerms.join(" "));
   } else if (query.searchTerms.length > 0) {
     scopeParts.push(query.searchTerms.join(" "));
   }
@@ -1201,6 +1245,8 @@ export async function searchLedger(
     message: string;
     displayCurrency: string;
     responseLanguage?: "English" | "Vietnamese";
+    /** Extra merchant/memo keywords merged with OR matching (LLM / retry expansion). */
+    extraSearchTerms?: string[];
   },
 ): Promise<LedgerSearchResponse | null> {
   const categories = await db.category.findMany({
@@ -1220,8 +1266,12 @@ export async function searchLedger(
     select: { id: true, name: true },
   });
 
-  const query = parseLedgerQuery(input.message, categories, wallets);
-  if (!query) return null;
+  const parsed = parseLedgerQuery(input.message, categories, wallets);
+  if (!parsed) return null;
+  const query =
+    input.extraSearchTerms && input.extraSearchTerms.length > 0
+      ? withExpandedSearchTerms(parsed, input.extraSearchTerms)
+      : parsed;
 
   const result = await executeLedgerQuery(db, {
     userId: input.userId,
@@ -1261,8 +1311,11 @@ export async function searchMatchingPlans(
   userId: string,
   message: string,
 ): Promise<LedgerPlanHit[]> {
-  const terms = extractSearchTerms(message);
-  if (terms.length === 0) return [];
+  const extracted = extractSearchTerms(message);
+  if (extracted.length === 0) return [];
+  const expansion = expandTopicSearchTerms(extracted);
+  const terms = expansion.terms;
+  const matchAny = expansion.expanded || terms.length === 1;
   const plans = await db.financialPlan.findMany({
     where: { userId },
     orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
@@ -1271,7 +1324,9 @@ export async function searchMatchingPlans(
   return plans
     .filter((plan) => {
       const haystack = normalizeQueryText(`${plan.title} ${plan.description ?? ""}`);
-      return terms.every((term) => haystack.includes(term));
+      return matchAny
+        ? terms.some((term) => haystack.includes(term))
+        : terms.every((term) => haystack.includes(term));
     })
     .slice(0, 20)
     .map((plan) => ({

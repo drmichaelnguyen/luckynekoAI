@@ -3,6 +3,7 @@
 import { auth } from "@/auth";
 import { synthesizeLedgerAnswer } from "@/lib/ai/data-answer";
 import { call9RouterChatCompletion, has9RouterConfig } from "@/lib/ai/9router";
+import { expandLedgerSearchKeywords } from "@/lib/ai/ledger-search-keywords";
 import { chooseChatRouterModels } from "@/lib/ai/model-router";
 import { loadAdminRuntimeSettings } from "@/lib/admin-runtime-settings";
 import { parseLedgerQuery, searchLedger } from "@/lib/finance/ledger-query";
@@ -35,11 +36,35 @@ export async function dashboardMiniChatAction(
       largeModel: adminSettings.routing.nineRouterModel,
     });
 
-    const ledgerSearch = await searchLedger(prisma, {
+    let ledgerSearch = await searchLedger(prisma, {
       userId: session.user.id,
       message,
       displayCurrency,
     });
+    if (
+      ledgerSearch != null &&
+      ledgerSearch.result.txCount === 0 &&
+      ledgerSearch.query.searchTerms.length > 0
+    ) {
+      const expandedKeywords = await expandLedgerSearchKeywords({
+        message,
+        userId: session.user.id,
+        geminiModel: adminSettings.routing.geminiModel,
+        nineRouterUrl: adminSettings.routing.nineRouterUrl,
+        nineRouterModel: adminSettings.routing.nineRouterMiniModel,
+      });
+      if (expandedKeywords.length > 0) {
+        const retry = await searchLedger(prisma, {
+          userId: session.user.id,
+          message,
+          displayCurrency,
+          extraSearchTerms: expandedKeywords,
+        });
+        if (retry && retry.result.txCount > 0) {
+          ledgerSearch = retry;
+        }
+      }
+    }
     if (ledgerSearch && !ledgerSearch.formattedText.includes("couldn't find")) {
       const response = has9RouterConfig()
         ? await synthesizeLedgerAnswer({

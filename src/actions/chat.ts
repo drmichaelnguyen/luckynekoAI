@@ -13,6 +13,7 @@ import {
   synthesizeLedgerAnswer,
 } from "@/lib/ai/data-answer";
 import { call9RouterChatCompletion, has9RouterConfig } from "@/lib/ai/9router";
+import { expandLedgerSearchKeywords } from "@/lib/ai/ledger-search-keywords";
 import { translateLedgerQuestionToEnglish } from "@/lib/ai/ledger-query-translate";
 import {
   chooseChatPrimary,
@@ -865,6 +866,33 @@ export async function handleChatInput(formData: FormData) {
       displayCurrency,
       responseLanguage,
     });
+    // When literal/topic search finds nothing, ask the model for related merchant/memo
+    // keywords (e.g. photography → nikon, adobe, lens) and search again.
+    if (
+      ledgerSearchAttempt != null &&
+      ledgerSearchAttempt.result.txCount === 0 &&
+      ledgerSearchAttempt.query.searchTerms.length > 0
+    ) {
+      const expandedKeywords = await expandLedgerSearchKeywords({
+        message: ledgerSearchMessage,
+        userId,
+        geminiModel: adminSettings.routing.geminiModel,
+        nineRouterUrl: adminSettings.routing.nineRouterUrl,
+        nineRouterModel: adminSettings.routing.nineRouterMiniModel,
+      });
+      if (expandedKeywords.length > 0) {
+        const retry = await searchLedger(prisma, {
+          userId,
+          message: ledgerSearchMessage,
+          displayCurrency,
+          responseLanguage,
+          extraSearchTerms: expandedKeywords,
+        });
+        if (retry && retry.result.txCount > 0) {
+          ledgerSearchAttempt = retry;
+        }
+      }
+    }
     const ledgerNotFound =
       ledgerSearchAttempt != null &&
       ledgerSearchAttempt.result.txCount === 0 &&
